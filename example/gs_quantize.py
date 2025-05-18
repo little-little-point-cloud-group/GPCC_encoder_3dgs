@@ -131,7 +131,7 @@ def quantize_3dg(bits, limits, pos, sh, opacity, scale, rot, tqdm=_tqdm):
     q_opacity = opacity
     q_scale = scale
     q_rot = np.zeros(rot.shape)
-    for i in tqdm(range(rot.shape[0])):
+    for i in range(rot.shape[0]):
         norm = np.inner(rot[i,:], rot[i,:])
         if norm > 1e-6:
             if rot[i,0]<0:

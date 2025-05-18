@@ -1,9 +1,7 @@
 from pathlib import Path
-import numpy as np
-import matplotlib.pylab as plt
 from tqdm import tqdm
-from gs_quantize import quantize_3dg, dequantize_3dg
-from gs_read_write import writePreprossConfig, readPreprossConfig, read3DG_ply, write3DG_ply
+from gs_quantize import quantize_3dg
+from gs_read_write import writePreprossConfig, read3DG_ply, write3DG_ply
 
 # Modify these locations to reflect your machine
 base=r'C:\little_boy\vs_workspace\3dgs\mpeg-pcc-tmc13\build\test'

@@ -54,9 +54,7 @@ class File:
 
         list_in = []
         list_in = add_AllPathFromBase_into_list(name, ori_path, list_in)
-        if len(list_in) == 1:
-            return list_in[0]
-        elif len(list_in) == 0:
+        if len(list_in) == 0:
             return None
 
         return list_in  # list=get_all_file_from_baseCatalog("encoder",base)

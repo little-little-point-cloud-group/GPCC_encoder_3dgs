@@ -177,14 +177,14 @@ def read3DG_ply(file, tqdm=_tqdm):
                 header_index[n][2] = header_index[n][2]=='f' or header_index[n][2]=='d'
         
         if file_format == "format binary_little_endian 1.0":
-            for n in tqdm(range(vertex)):
+            for n in range(vertex):
                 for array, k, data_type, byte_count, skip in header_index:
                     value = struct.unpack(data_type, fd.read(byte_count))[0]
                     if skip:
                         continue
                     array[n,k] = value
         elif file_format == "format ascii 1.0":
-            for n in tqdm(range(vertex)):
+            for n in range(vertex):
                 line = fd.readline().decode("utf-8")
                 values = line.split()
                 i = 0
@@ -267,7 +267,7 @@ def write3DG_ply(pos, sh, opacity, scale, rot, flag_isfloat, file, tqdm=_tqdm):
         fd.write(str.encode("end_header\n"))
 
         if flag_isfloat:
-            for n in tqdm(range(vertex)):
+            for n in range(vertex):
                 for i in range(3):
                     fd.write(struct.pack('f', pos[n,i]))
                 for i in range(3):
@@ -283,7 +283,7 @@ def write3DG_ply(pos, sh, opacity, scale, rot, flag_isfloat, file, tqdm=_tqdm):
                 for i in range(4):
                     fd.write(struct.pack('f', rot[n,i]))
         else:
-            for n in tqdm(range(vertex)):
+            for n in range(vertex):
                 for i in range(3):
                     fd.write(struct.pack('f', pos[n,i]))
                 for i in range(sh.shape[2]):
