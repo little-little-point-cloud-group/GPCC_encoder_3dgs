@@ -8,6 +8,8 @@ from gsplat.rendering import rasterization
 
 def render(cameras_path,ply_path,output_dir):
     factor = 1
+    o=output_dir
+    print("正在渲染:"+o)
     model_path=Path(cameras_path)
     frame_path=Path(ply_path)
     output_dir=Path(output_dir)
@@ -152,6 +154,8 @@ def render(cameras_path,ply_path,output_dir):
     for j, image in enumerate(images.values()):
         im = Image.fromarray(frames[j], 'RGB')
         im.save(Path(output_dir, Path(image.name).stem + ".png"))
+
+    print("渲染结束:" + o)
 
 
 

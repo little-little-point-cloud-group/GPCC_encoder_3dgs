@@ -38,12 +38,12 @@ condition_selected = {
 # 点云类别，目前这个变量没有使用
 class_selected = (
     "m71763_breakfast_stable",
-    #"m71763_cinema_stable",
+    "m71763_cinema_stable",
 )
 
 tracks=(
     "track",
-    #"partially-track"
+    "partially-track"
 )
 
 # 待测试的编解码器,0代表anchor，1代表test,支持选择一个
@@ -51,8 +51,9 @@ tmc3_selected = 1
 
 
 # 输入文件路径
-template_excel = "ctc/anchor.xlsm"  # 带宏的 Excel 模板
-thread_num_limit=2
+template_excel = "ctc/anchor__1F-geo.xlsm"  # 带宏的 Excel 模板
+output_excel="1F-geo__开启预测.xlsm"
+thread_num_limit=[8,2,8]                     #分别为编码、渲染、计算失真的进程数（渲染的进程不建议多开）
 
 
 PCC_sequence=r'C:\little_boy\PCC_sequence\3DGS'
@@ -91,7 +92,7 @@ def pre_process(output,class_selecte,track,frame):
 
 
     q_pos, q_sh, q_opacity, q_scale, q_rot = quantize_3dg(bits, limits, pos, sh, opacity, scale, rot, tqdm)
-
+    #q_sh[:,1:4,:]=2048
 
     write3DG_ply(q_pos, q_sh, q_opacity, q_scale, q_rot, False, file_quantized, tqdm)
 
@@ -114,10 +115,10 @@ def post_process(output):
     write3DG_ply(r_pos, r_sh, r_opacity, r_scale, r_rot, True, file_dequantized, tqdm)
 
 
-def encoder(output,rate_point):
+def encoder(output,rate_point,exe):
     _file =output+"/"+rate_point+"__Bitbream__encoder.txt"
     with open(_file, "w") as f:
-        main = str(tmc3_selected)+'_tmc3.exe'
+        main=exe
         condition_selecte = condition_selected[list(condition_selected.keys())[0]]
         cfg_path = os.getcwd() + "/cfg" + str(tmc3_selected) + "/" + branch_selected[0] + "/" + condition_selecte + "/" + rate_point
         para_encfg = "-c " + cfg_path + "/encoder.cfg"
@@ -125,14 +126,13 @@ def encoder(output,rate_point):
 
         para2 = "--uncompressedDataPath=" + output + "/" + "quantized.ply"
         para3 = "--compressedStreamPath=" + output + "/" + "compress.bin"
-        #para4 = "--reconstructedDataPath=" + output + "/" + "encoder.ply"
-        para = "%s %s %s %s" % (main, para_encfg, para2, para3)
+        para4 = "--reconstructedDataPath=" + output + "/" + "encoder.ply"
+        para = "%s %s %s %s %s" % (main, para_encfg, para2, para3,para4)
         r = subprocess.run(para, capture_output=True, text=True)
         print(r.stdout, file=f)
         if not os.path.exists(output + "/" + "encoder.ply"):
-            pass
-            #print("编码端重建失败")
-            #print("运行配置为: " + para)
+            print("编码端重建失败")
+            print("运行配置为: " + para)
 
     _file = output + "/" + rate_point + "__Bitbream__decoder.txt"
     with open(_file, "w") as f:
@@ -148,7 +148,8 @@ def encoder(output,rate_point):
 
 def metrics(output,class_selecte,track,frame):
     main = "ctc/QMIV.exe"
-    gt = File.get_all_file_from_baseCatalog(".png", PCC_sequence+"/"+class_selecte+"/renders/"+track+"/"+frame)
+
+    gt = File.get_all_file_from_baseCatalog(".png", PCC_sequence+"/"+class_selecte+"/renders/"+track+"/"+f"frame{frame:03d}")
     render = File.get_all_file_from_baseCatalog(".png", output + "/renders" )
     metric_path = output + "/__metrics.txt"
 
@@ -198,11 +199,11 @@ class Gaussian:
 # ======================================
 # 下面变量代码短期不需要修改
 
-        print("代码："+self.tmc13)
+
         self.PCC_sequence=PCC_sequence
-        self.output_excel=branch_selected[0]+".xlsm"
-        #self.rate_points=["r01","r02","r03","r04",]
-        self.rate_points=["r02",]
+
+        self.rate_points=["r01","r02","r03","r04",]
+
 
         self.anchor_columns = {
             "PSNR-RGB": "F",  # PSNR-RGB 列
@@ -257,7 +258,7 @@ class Gaussian:
 # ======================================
 #下面变量实时更新
         self.condition_selecte = None
-        self.frames=30             #32帧数据
+        self.frames=1             #32帧数据
         self.class_selecte = class_selected[0]
         self.metrics_path = dict()
         self.tmc=tmc3_selected
@@ -265,6 +266,8 @@ class Gaussian:
         self.wb =openpyxl.load_workbook(template_excel, keep_vba=True,read_only=False)
 
     def run(self):
+            print("代码：" + self.tmc13)
+
         #清空分支
             if os.path.exists(branch_selected[0]):
                 shutil.rmtree(branch_selected[0])
@@ -273,14 +276,54 @@ class Gaussian:
         # 下面为检测anchor的render图像，没有的话就立即渲染
             self.image_anchor()
 
-            thread_pool = multiprocessing.Pool(thread_num_limit)
+        # ======================================
+        # 编解码
+            thread_pool = multiprocessing.Pool(thread_num_limit[0])
             for class_selecte in class_selected:
                 for track in tracks:
                     for rate_point in self.rate_points:
                         for frame in range(self.frames):
                             #self.sub_run(class_selecte, track, rate_point, frame)
-                            thread_pool.apply_async(self.sub_run, args=(class_selecte,track,rate_point,frame))
+                            thread_pool.apply_async(self.sub_run, args=(class_selecte,track,rate_point,frame,self.tmc13))
 
+
+            thread_pool.close()  # 关闭进程池入口，不再接受新进程插入
+            thread_pool.join()  # 主进程阻塞，等待进程池中的所有子进程结束，再继续运行主进程
+
+            # ======================================
+            # 渲染
+
+            thread_pool = multiprocessing.Pool(thread_num_limit[1])
+            for class_selecte in class_selected:
+                for track in tracks:
+                    for rate_point in self.rate_points:
+                        for frame in range(self.frames):
+                            condition_selecte = condition_selected[list(condition_selected.keys())[0]]
+                            output = os.path.join(os.getcwd(), branch_selected[0], condition_selecte, class_selecte,
+                                                  track, rate_point, f"frame{frame:03d}")
+                            cameras_path=PCC_sequence+"/"+class_selecte+"/cameras/"+f"frame{frame:03d}"
+                            ply_path=output+"/dequantized.ply"
+                            output_dir=output+"/renders"
+                            thread_pool.apply_async(render, args=(cameras_path,ply_path,output_dir))
+                            #render(cameras_path,ply_path,output_dir)  # 渲染
+                            #metrics(output,class_selecte,track,frame)  # 计算失真
+
+            thread_pool.close()  # 关闭进程池入口，不再接受新进程插入
+            thread_pool.join()  # 主进程阻塞，等待进程池中的所有子进程结束，再继续运行主进程
+
+            # ======================================
+            # 失真
+            print("计算失真")
+            thread_pool = multiprocessing.Pool(thread_num_limit[2])
+            for class_selecte in class_selected:
+                for track in tracks:
+                    for rate_point in self.rate_points:
+                        for frame in range(self.frames):
+                            condition_selecte = condition_selected[list(condition_selected.keys())[0]]
+                            output = os.path.join(os.getcwd(), branch_selected[0], condition_selecte, class_selecte,
+                                                  track, rate_point, f"frame{frame:03d}")
+                            thread_pool.apply_async(metrics, args=(output,class_selecte,track,frame))
+                            # metrics(output,class_selecte,track,frame)  # 计算失真
 
             thread_pool.close()  # 关闭进程池入口，不再接受新进程插入
             thread_pool.join()  # 主进程阻塞，等待进程池中的所有子进程结束，再继续运行主进程
@@ -288,23 +331,24 @@ class Gaussian:
             self.write_to_excel()      #写入excel
 
     @staticmethod
-    def sub_run(class_selecte,track,rate_point,frame):
+    def sub_run(class_selecte,track,rate_point,frame,tmc13):
         condition_selecte=condition_selected[list(condition_selected.keys())[0]]
         output =  os.path.join(os.getcwd(),branch_selected[0],condition_selecte,class_selecte,track,rate_point,f"frame{frame:03d}")
         print("正在运行:"+os.path.join(branch_selected[0],condition_selecte,class_selecte,track,rate_point,f"frame{frame:03d}"))
         os.makedirs(output, exist_ok=True)
         frame=f"frame{frame:03d}"
-        pre_process(output,class_selecte,track,frame)  # 预处理
-        encoder(output,rate_point)  # 编码
-        post_process(output)  # 后处理
 
+        pre_process(output,class_selecte,track,frame)  # 预处理
+        encoder(output,rate_point,tmc13)  # 编码
+        post_process(output)  # 后处理
+        '''
         cameras_path=PCC_sequence+"/"+class_selecte+"/cameras/"+frame
         ply_path=output+"/dequantized.ply"
         output_dir=output+"/renders"
         render(cameras_path,ply_path,output_dir)  # 渲染
         metrics(output,class_selecte,track,frame)  # 计算失真
-        print("结束:" + os.path.join(branch_selected[0], condition_selecte, class_selecte, track, rate_point,
-                                         f"frame{frame:03d}"))
+        '''
+        print("结束:" + os.path.join(branch_selected[0],condition_selecte,class_selecte,track,rate_point,frame))
 
     def image_anchor(self):
 
@@ -325,7 +369,7 @@ class Gaussian:
 
         # ======================================
         # 创建sheet
-        self.create_sheet()
+        #self.create_sheet()
 
 
         # ======================================
@@ -354,11 +398,11 @@ class Gaussian:
 
 
         # 保存为新文件（保留宏）
-        self.wb.save(branch_selected[0]+"/"+self.output_excel)
-        print(f"数据已成功写入 {self.output_excel}")
+        self.wb.save(branch_selected[0]+"/"+output_excel)
+        print(f"数据已成功写入 {output_excel}")
         # 保存为新文件（保留宏）
-        os.makedirs("result", exist_ok=True)
-        self.wb.save("result/"+self.output_excel)
+        os.makedirs("1F-geo", exist_ok=True)
+        self.wb.save("1F-geo/"+output_excel)
 
 
 # ======================================
@@ -540,14 +584,15 @@ class Gaussian:
                 ws[f'{columns[key]}{row}'].value += data[key] * 8 / 1000
 
 
-    def create_sheet(self,anchor="G-PCC v1(151 config)",test="my"):
+    def create_sheet(self,anchor="MPEG-151",test="my"):
         row=4
         row_main=9
-        # 获取源工作表
-        source_sheet = self.wb['M_NC5']
 
         self.wb["Summary (auto)"].cell(row=3, column=3).value = anchor
         self.wb["Summary (auto)"].cell(row=4, column=3).value = test
+
+        # 获取源工作表
+        source_sheet = self.wb['M_NC5']
 
         sheets=["RGB-PSNR","YUV-PSNR","YUV-SSIM","YUV-IVSSIM","LPIPS"]
         for class_selecte in class_selected:
@@ -568,5 +613,9 @@ class Gaussian:
 
 
 if __name__ == '__main__':
-    g = Gaussian()
-    g.run()
+    diff=["diff100","diff200","diff300"]
+    for f in diff:
+        g = Gaussian()
+        g.tmc13="tmc13"+"/"+f+".exe"
+        output_excel="1F-geo__"+f+".xlsm"
+        g.run()

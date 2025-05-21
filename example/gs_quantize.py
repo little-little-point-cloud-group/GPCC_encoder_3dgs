@@ -209,7 +209,7 @@ def dequantize_3dg(bits, limits, q_pos, q_sh, q_opacity, q_scale, q_rot, tqdm=_t
     r_scale   = inv_interval(dequantize(q_scale, bits_scale),      limits_scale)
     r_rot     = inv_interval(dequantize(q_rot, bits_rot),            limits_rot)
     
-    for i in tqdm(range(r_rot.shape[0])):
+    for i in range(r_rot.shape[0]):
         norm = np.inner(r_rot[i,:], r_rot[i,:])
         if norm > 1e-6:
             if r_rot[i,0]<0:
