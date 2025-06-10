@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-
+import filecmp
 from tqdm import tqdm
 from example.gs_quantize import quantize_3dg, dequantize_3dg
 from example.gs_read_write import writePreprossConfig, readPreprossConfig, read3DG_ply, write3DG_ply
@@ -43,7 +43,7 @@ class_selected = (
 
 tracks=(
     "track",
-    "partially-track"
+    "partially-track",
 )
 
 # 待测试的编解码器,0代表anchor，1代表test,支持选择一个
@@ -51,9 +51,9 @@ tmc3_selected = 1
 
 
 # 输入文件路径
-template_excel = "ctc/anchor__1F-geo.xlsm"  # 带宏的 Excel 模板
-output_excel="1F-geo__开启预测.xlsm"
-thread_num_limit=[8,2,8]                     #分别为编码、渲染、计算失真的进程数（渲染的进程不建议多开）
+template_excel = "ctc/anchor.xlsm"  # 带宏的 Excel 模板
+output_excel="32F-geo.xlsm"
+thread_num_limit=[10,1,8]                     #分别为编码、渲染、计算失真的进程数（渲染的进程不建议多开）
 
 
 PCC_sequence=r'C:\little_boy\PCC_sequence\3DGS'
@@ -92,7 +92,7 @@ def pre_process(output,class_selecte,track,frame):
 
 
     q_pos, q_sh, q_opacity, q_scale, q_rot = quantize_3dg(bits, limits, pos, sh, opacity, scale, rot, tqdm)
-    #q_sh[:,1:4,:]=2048
+    #q_sh[:,1:,:]=2048
 
     write3DG_ply(q_pos, q_sh, q_opacity, q_scale, q_rot, False, file_quantized, tqdm)
 
@@ -144,6 +144,8 @@ def encoder(output,rate_point,exe):
             print("解码端重建失败")
             print("运行配置为: " + para)
             print(r.stdout)
+    if not filecmp.cmp(output + "/" + "encoder.ply", output + "/" + "decoder.ply", shallow=False):
+        print("编解码不匹配")
 
 
 def metrics(output,class_selecte,track,frame):
@@ -233,6 +235,8 @@ class Gaussian:
         "scaling":"K",
         "opacity":"L",
         "metadata":"M",
+        "Enc T [s]":"P",
+        "Dec T [s]":"Q",
         }
 
         self.test_Bitstream_columns={
@@ -245,6 +249,8 @@ class Gaussian:
         "scaling":"AC",
         "opacity":"AD",
         "metadata":"AE",
+        "Enc T [s]":"AH",
+        "Dec T [s]":"AI",
         }
 
 
@@ -258,7 +264,7 @@ class Gaussian:
 # ======================================
 #下面变量实时更新
         self.condition_selecte = None
-        self.frames=1             #32帧数据
+        self.frames=range(0,32)             #起始帧，帧数
         self.class_selecte = class_selected[0]
         self.metrics_path = dict()
         self.tmc=tmc3_selected
@@ -267,6 +273,7 @@ class Gaussian:
 
     def run(self):
             print("代码：" + self.tmc13)
+            thread_pool = multiprocessing.Pool(thread_num_limit[0])
 
         #清空分支
             if os.path.exists(branch_selected[0]):
@@ -278,11 +285,11 @@ class Gaussian:
 
         # ======================================
         # 编解码
-            thread_pool = multiprocessing.Pool(thread_num_limit[0])
+            
             for class_selecte in class_selected:
                 for track in tracks:
                     for rate_point in self.rate_points:
-                        for frame in range(self.frames):
+                        for frame in self.frames:
                             #self.sub_run(class_selecte, track, rate_point, frame)
                             thread_pool.apply_async(self.sub_run, args=(class_selecte,track,rate_point,frame,self.tmc13))
 
@@ -297,7 +304,7 @@ class Gaussian:
             for class_selecte in class_selected:
                 for track in tracks:
                     for rate_point in self.rate_points:
-                        for frame in range(self.frames):
+                        for frame in self.frames:
                             condition_selecte = condition_selected[list(condition_selected.keys())[0]]
                             output = os.path.join(os.getcwd(), branch_selected[0], condition_selecte, class_selecte,
                                                   track, rate_point, f"frame{frame:03d}")
@@ -311,14 +318,14 @@ class Gaussian:
             thread_pool.close()  # 关闭进程池入口，不再接受新进程插入
             thread_pool.join()  # 主进程阻塞，等待进程池中的所有子进程结束，再继续运行主进程
 
-            # ======================================
+            #======================================
             # 失真
             print("计算失真")
             thread_pool = multiprocessing.Pool(thread_num_limit[2])
             for class_selecte in class_selected:
                 for track in tracks:
                     for rate_point in self.rate_points:
-                        for frame in range(self.frames):
+                        for frame in self.frames:
                             condition_selecte = condition_selected[list(condition_selected.keys())[0]]
                             output = os.path.join(os.getcwd(), branch_selected[0], condition_selecte, class_selecte,
                                                   track, rate_point, f"frame{frame:03d}")
@@ -378,7 +385,9 @@ class Gaussian:
         metrics_path=File.get_all_file_from_baseCatalog("__metrics.txt",branch_selected[0])
         metrics_data=dict()
         for path in metrics_path:
-            metrics_data[path]=self.extract_metrics(path)
+            frameId=int(path.split("/")[-2].split("frame")[1])
+            if frameId in self.frames:
+                metrics_data[path]=self.extract_metrics(path)
 
         self.sub_write_to_excel(metrics_data)
 
@@ -388,21 +397,22 @@ class Gaussian:
         # ======================================
         bitstream_files=File.get_all_file_from_baseCatalog("__Bitbream__encoder.txt",branch_selected[0])
         for bitstream_file in bitstream_files:
+            frameId = int(bitstream_file.split("/")[-2].split("frame")[1])
+            if frameId in self.frames:
+                labels=bitstream_file.split("/")
+                increase_row=int(labels[-1][1:3])-1
 
-            labels=bitstream_file.split("/")
-            increase_row=int(labels[-1][1:3])-1
-
-            parsed_data = self.parse_bitstream(bitstream_file)
-            aggregated = self.aggregate_attributes(parsed_data)
-            self.sub_bitstream_write_to_excel(aggregated,bitstream_file)
+                parsed_data = self.parse_bitstream(bitstream_file)
+                aggregated = self.aggregate_attributes(parsed_data)
+                self.sub_bitstream_write_to_excel(aggregated,bitstream_file)
 
 
         # 保存为新文件（保留宏）
         self.wb.save(branch_selected[0]+"/"+output_excel)
         print(f"数据已成功写入 {output_excel}")
         # 保存为新文件（保留宏）
-        os.makedirs("1F-geo", exist_ok=True)
-        self.wb.save("1F-geo/"+output_excel)
+        os.makedirs("32F-geo", exist_ok=True)
+        self.wb.save("32F-geo/"+output_excel)
 
 
 # ======================================
@@ -486,7 +496,7 @@ class Gaussian:
                                 if a is None:
                                    pass
                                 else:
-                                    ws[f'{columns[key]}{row}'].value /=self.frames
+                                    ws[f'{columns[key]}{row}'].value /=len(self.frames)
 
 
 
@@ -508,9 +518,40 @@ class Gaussian:
                     if attr not in attributes:
                         attributes[attr] = 0
                     attributes[attr] +=  size
+
         total=0
         for key in attributes.keys():
             total+=attributes[key]
+
+        pattern = re.compile(r'^Total bitstream size (\d+) B')
+        with open(file_path, 'r') as f:
+            for line in f:
+                match = pattern.match(line.strip())
+                if match:
+                    size = int(match.group(1))  # 字节数
+                    attributes["Total bitstream size"] = size
+
+        attributes["metadata"] = attributes["Total bitstream size"] - total
+
+        pattern = re.compile(r'^Processing time \(user\): (\d+(?:\.\d+)?) s')
+        with open(file_path, 'r') as f:
+            for line in f:
+                match = pattern.match(line.strip())
+                if match:
+                    encoder_time = float(match.group(1))  # 字节数
+                    attributes["encoder Processing time (user):"] = encoder_time
+
+
+        decode_path=file_path.split("__Bitbream__encoder.txt")[0]+"__Bitbream__decoder.txt"
+
+        pattern = re.compile(r'^Processing time \(user\): (\d+(?:\.\d+)?) s')
+        with open(decode_path, 'r') as f:
+            for line in f:
+                match = pattern.match(line.strip())
+                if match:
+                    decoder_time = float(match.group(1))  # 字节数
+                    attributes["decoder Processing time (user):"] = decoder_time
+
         return attributes
 
 # ======================================
@@ -550,7 +591,9 @@ class Gaussian:
             "rotation": sum(attrs[k] for k in attrs.keys() if k.startswith("rot_")),
             "scaling": sum(attrs[k] for k in attrs.keys() if k.startswith("scale_")),
             "opacity": sum(attrs[k] for k in attrs.keys() if k.startswith("opacity")),
-            "metadata": 0  # 元数据占位符
+            "metadata": attrs["metadata"],  # 元数据占位符
+            "Enc T [s]":attrs["encoder Processing time (user):"],
+            "Dec T [s]":attrs["decoder Processing time (user):"],
         }
 
 # ======================================
@@ -579,9 +622,15 @@ class Gaussian:
             a = ws[f'{columns[key]}{row}'].value
             if a is None:
                 ws[f'{columns[key]}{row}'] = 0
-                ws[f'{columns[key]}{row}'].value += data[key] * 8 / 1000
+                if key=="Enc T [s]" or key=="Dec T [s]":
+                    ws[f'{columns[key]}{row}'].value += data[key]
+                else:
+                    ws[f'{columns[key]}{row}'].value += data[key] * 8 / 1000
             else:
-                ws[f'{columns[key]}{row}'].value += data[key] * 8 / 1000
+                if key=="Enc T [s]" or key=="Dec T [s]":
+                    ws[f'{columns[key]}{row}'].value += data[key]
+                else:
+                    ws[f'{columns[key]}{row}'].value += data[key] * 8 / 1000
 
 
     def create_sheet(self,anchor="MPEG-151",test="my"):
@@ -610,12 +659,14 @@ class Gaussian:
                 row=row+11
                 row_main=row_main+1
         self.wb.remove(self.wb['M_NC5'])
+        self.wb.save("ctc/" + output_excel)
+
 
 
 if __name__ == '__main__':
-    diff=["diff100","diff200","diff300"]
+    diff=["raht精度增加20",]
     for f in diff:
         g = Gaussian()
         g.tmc13="tmc13"+"/"+f+".exe"
-        output_excel="1F-geo__"+f+".xlsm"
+        output_excel="32F-geo__"+f+".xlsm"
         g.run()
