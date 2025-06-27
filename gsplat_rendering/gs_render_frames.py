@@ -5,6 +5,8 @@ from PIL import Image
 from gsplat_rendering.gs_read_write import read3DG_ply
 import torch
 from gsplat.rendering import rasterization
+import os
+#os.environ["RENDERER"] = "gsplat"
 
 def render(cameras_path,ply_path,output_dir):
     factor = 1

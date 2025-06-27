@@ -25,6 +25,8 @@ limits_rot = [-1,1]
 bits = [bits_pos, bits_sh, bits_opacity, bits_scale, bits_rot]
 limits = [limits_pos, limits_sh, limits_opacity, limits_scale, limits_rot]
 
+
+
 # Quantization
 print("-( Read PLY )-------------------------")
 pos, sh, opacity, scale, rot = read3DG_ply(file_raw, tqdm)
