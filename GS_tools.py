@@ -18,9 +18,9 @@ import multiprocessing
 
 # 测试分支，注意：此处请单选
 branch_selected = (
-    # "octree-predlift",
+     "octree-predlift",
     # "octree-predlift-inter",
-    "octree-raht",
+    # "octree-raht",
     # "octree-raht-inter",
     # "predgeom-predlift",
     # "predgeom-predlift-inter",
@@ -37,15 +37,15 @@ condition_selected = {
 
 # 点云类别，目前这个变量没有使用
 class_selected = (
-    #"fruit",
+    "fruit",
     "breakfast",
     #"gesture",  #缺失330相机位置
     #"glasses",
     #"sweater",  #缺失0738相机位置
-    #"m71763_breakfast_stable",
-    #"m71763_cinema_stable",
-    #"m71763_breakdance_stable",
-    #"m71763_bartender_stable",
+    "m71763_breakfast_stable",
+    "m71763_cinema_stable",
+    "m71763_breakdance_stable",
+    "m71763_bartender_stable",
 )
 
 tracks=(
@@ -54,12 +54,12 @@ tracks=(
 )
 
 # 待测试的编解码器,str(tmc3_selected)+'_tmc3.exe'为对应文件
-tmc3_selected = 0
+tmc3_selected = 1
 
 
 # 输入文件路径
-template_excel = "ctc/anchor_single-frame.xlsm"  # 带宏的 Excel 模板
-output_excel="18bits_single-frame.xlsm"
+template_excel = "ctc/anchor_tem.xlsm"  # 带宏的 Excel 模板
+output_excel="predlift全部精度10.xlsm"
 thread_num_limit=[8,1,4]                     #分别为编码、渲染、计算失真的进程数（渲染的进程不建议多开）
 
 
@@ -83,7 +83,9 @@ def pre_process(output,class_selecte,track,frame):
     limits_pos = [[0, 0, 0], 256]
     limits_sh = [-4, 4]
     limits_opacity = [-7, 18]
+
     limits_scale = [-26, 4]
+    #limits_scale=np.exp(limits_scale)
     limits_rot = [-1, 1]
 
     bits = [bits_pos, bits_sh, bits_opacity, bits_scale, bits_rot]
@@ -223,7 +225,10 @@ class Gaussian:
         self.breakfastFrame = range(0, 1)
         self.fruitFrame = range(51, 52)
         self.rate_points=["r01","r02","r03","r04",]
-        self.rate_points=["r01",]
+        #self.rate_points=["r01",]
+
+        self.anchor_name="anchor"
+        self.test_name="四元数-1"
 
         self.anchor_columns = {
             "PSNR-RGB": "F",  # PSNR-RGB 列
@@ -287,6 +292,12 @@ class Gaussian:
         self.tmc=tmc3_selected
         # 加载带宏的模板文件
         self.wb =openpyxl.load_workbook(template_excel, keep_vba=True,read_only=False)
+
+        def set_name():
+            self.wb["Summary (auto)"].cell(row=3, column=3).value = self.anchor_name
+            self.wb["Summary (auto)"].cell(row=4, column=3).value = self.test_name
+
+        self.set_name=set_name
 
     def run_with_anchor(self):
 
@@ -604,8 +615,6 @@ class Gaussian:
                         ws[f'{columns[key]}{row}'].value += data[key]/len(frames)
 
 
-
-
 # ======================================
 # 步骤 3：提取属性的编码bit
 # ======================================
@@ -742,7 +751,7 @@ class Gaussian:
     def create_sheet(self,anchor="MPEG-151",test="my"):
         row=4
         row_main=9
-
+        self.wb = openpyxl.load_workbook(r"C:\Users\31046\Desktop\GPCC_encoder_3dgs\ctc\empty.xlsm", keep_vba=True, read_only=False)
         self.wb["Summary (auto)"].cell(row=3, column=3).value = anchor
         self.wb["Summary (auto)"].cell(row=4, column=3).value = test
 
@@ -783,8 +792,48 @@ class Gaussian:
 
 
         self.wb.remove(self.wb['M_NC5'])
-        self.wb.save("ctc/" + output_excel)
+        self.wb.save("ctc/" + "anchor_tem.xlsm")
 
+
+    #第一个num表示other中的anchor还是test，第二个同理
+    def copy_to_excel(self,other,my,num0,num1):
+        other = openpyxl.load_workbook(other, keep_vba=True, read_only=False)
+        my = openpyxl.load_workbook(my, keep_vba=True, read_only=False)
+
+
+        columns0 = self.test_Bitstream_columns if num0 else self.anchor_Bitstream_columns
+        columns1 = self.test_Bitstream_columns if num1 else self.anchor_Bitstream_columns
+
+
+        sheetnames=other.get_sheet_names()
+        for i in range(6,len(sheetnames)):
+            sheetname=sheetnames[i]
+            ws0 = other[sheetname]
+            ws1 = my[sheetname]
+            start_row = 16
+            for increase_row in range(len(self.rate_points)):
+                row=start_row+increase_row
+                for key in columns1:
+                    ws1[f'{columns1[key]}{row}'].value = ws0[f'{columns0[key]}{row}'].value
+
+        columns0 = self.test_columns if num0 else self.anchor_columns
+        columns1 = self.test_columns if num1 else self.anchor_columns
+
+
+        start_row = self.PSNR_start_row
+        for i in range(6,len(sheetnames)):
+            sheetname=sheetnames[i]
+            ws0 = other[sheetname]
+            ws1 = my[sheetname]
+            for view in range(121):
+                for increase_row in range(len(self.rate_points)):
+                    row = start_row + 5*view+increase_row# 假设数据按顺序排列
+                    for key in columns1:
+                        ws1[f'{columns1[key]}{row}'].value = ws0[f'{columns0[key]}{row}'].value
+
+
+
+        my.save("1F-geo/" + output_excel)
 
 
 if __name__ == '__main__':
