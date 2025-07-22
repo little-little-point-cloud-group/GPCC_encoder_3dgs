@@ -18,9 +18,9 @@ import multiprocessing
 
 # 测试分支，注意：此处请单选
 branch_selected = (
-     "octree-predlift",
+    # "octree-predlift",
     # "octree-predlift-inter",
-    # "octree-raht",
+     "octree-raht",
     # "octree-raht-inter",
     # "predgeom-predlift",
     # "predgeom-predlift-inter",
@@ -37,15 +37,15 @@ condition_selected = {
 
 # 点云类别，目前这个变量没有使用
 class_selected = (
-    "fruit",
-    "breakfast",
+    #"fruit",
+    #"breakfast",
     #"gesture",  #缺失330相机位置
     #"glasses",
     #"sweater",  #缺失0738相机位置
     "m71763_breakfast_stable",
-    "m71763_cinema_stable",
-    "m71763_breakdance_stable",
-    "m71763_bartender_stable",
+    #"m71763_cinema_stable",
+    #"m71763_breakdance_stable",
+    #"m71763_bartender_stable",
 )
 
 tracks=(
@@ -58,8 +58,8 @@ tmc3_selected = 1
 
 
 # 输入文件路径
-template_excel = "ctc/anchor_tem.xlsm"  # 带宏的 Excel 模板
-output_excel="predlift全部精度10.xlsm"
+template_excel = "ctc/anchor_single-frame.xlsm"  # 带宏的 Excel 模板
+output_excel="only增加上下文.xlsm"
 thread_num_limit=[8,1,4]                     #分别为编码、渲染、计算失真的进程数（渲染的进程不建议多开）
 
 
