@@ -5,14 +5,11 @@ from tqdm import tqdm
 from example.gs_quantize import quantize_3dg, dequantize_3dg
 from example.gs_read_write import writePreprossConfig, readPreprossConfig, read3DG_ply, write3DG_ply
 import subprocess
-import matplotlib.pyplot as plt
-import lpips
 import numpy as np
 import re
 import openpyxl
 import shutil
 from my_tools import File
-from gsplat_rendering.gs_render_frames import render
 import multiprocessing
 
 
@@ -37,20 +34,16 @@ condition_selected = {
 
 # 点云类别，目前这个变量没有使用
 class_selected = (
-    #"fruit",
-    #"breakfast",
-    #"gesture",  #缺失330相机位置
-    #"glasses",
-    #"sweater",  #缺失0738相机位置
+    #"ManWithFruit",
     "m71763_breakfast_stable",
     #"m71763_cinema_stable",
-    #"m71763_breakdance_stable",
     #"m71763_bartender_stable",
 )
 
+#1F-geom测试条件没有半track
 tracks=(
     "track",
-    "partially-track",
+    #"partially-track",
 )
 
 # 待测试的编解码器,str(tmc3_selected)+'_tmc3.exe'为对应文件
@@ -58,13 +51,27 @@ tmc3_selected = 1
 
 
 # 输入文件路径
-template_excel = "ctc/anchor_single-frame.xlsm"  # 带宏的 Excel 模板
-output_excel="only增加上下文.xlsm"
-thread_num_limit=[8,1,4]                     #分别为编码、渲染、计算失真的进程数（渲染的进程不建议多开）
+template_excel = "ctc/empty.xlsm"  # 带宏的 Excel 模板
+output_excel="lift__vs__raht.xlsm"
+thread_num_limit=8                     #编码、计算失真的进程数
 
 
 PCC_sequence=r'D:\pcc_sequence\MPEG_3DGS'
 
+#是否保存图像
+save_iamge=0
+
+#保存视角，单帧此参数无效
+onlyViewpoint=1
+
+
+# 渲染图像的宽、高、视角数
+seq_information = {
+    "ManWithFruit": [3840, 2160, 24],
+    "m71763_breakfast_stable": [1920, 1080, 15],
+    "m71763_cinema_stable": [1920, 1080, 21],
+    "m71763_bartender_stable": [1920, 1080, 21],
+}
 
 def pre_process(output,class_selecte,track,frame):
     # Modify these locations to reflect your machine
@@ -105,7 +112,6 @@ def pre_process(output,class_selecte,track,frame):
 
     write3DG_ply(q_pos, q_sh, q_opacity, q_scale, q_rot, False, file_quantized, tqdm)
 
-
 def post_process(output):
     file_decoded = Path(output + "/decoder.ply")  # input: the PLY file of the decoded frame
     file_config = Path(output + "/quantized.json")  # input: json file containing the informarion necessary to inverse the quantization
@@ -123,11 +129,13 @@ def post_process(output):
 
     write3DG_ply(r_pos, r_sh, r_opacity, r_scale, r_rot, True, file_dequantized, tqdm)
 
-
 def encoder(output,rate_point,exe,tmc):
     if not os.path.exists(exe):
         print("无启动文件")
-    _file =output+"/"+rate_point+"__Bitbream__encoder.txt"
+    frame=output.split("/")[-1]
+
+    os.makedirs(str(Path(output).parent)+"/txt", exist_ok=True)
+    _file =str(Path(output).parent)+"/txt/"+frame+"__Bitbream__encoder.txt"
     with open(_file, "w") as f:
         main=exe
         condition_selecte = condition_selected[list(condition_selected.keys())[0]]
@@ -145,7 +153,7 @@ def encoder(output,rate_point,exe,tmc):
             print("编码端重建失败")
             print("运行配置为: " + para)
 
-    _file = output + "/" + rate_point + "__Bitbream__decoder.txt"
+    _file = str(Path(output).parent)+"/txt/"+frame+ "__Bitbream__decoder.txt"
     with open(_file, "w") as f:
         para4 = "--reconstructedDataPath=" + output + "/" + "decoder.ply"
         para = "%s %s %s %s" % (main, para_decfg, para3, para4)
@@ -158,92 +166,91 @@ def encoder(output,rate_point,exe,tmc):
     if not filecmp.cmp(output + "/" + "encoder.ply", output + "/" + "decoder.ply", shallow=False):
         print("编解码不匹配")
 
+def cam_to_ply(ply,camDIR,exe,output):
+    para1="--input="+ply
+    para2=para3=""
 
-def metrics(output,class_selecte,track,frame):
-    main = "ctc/QMIV.exe"
-
-    if class_selecte.find("stable") >= 0:
-        gt_path = PCC_sequence + "/" + class_selecte + "/renders/" + track + "/" + f"frame{frame:03d}"
+    if os.path.exists(camDIR+"/cameras.txt"):
+        para2="--camera="+camDIR+"/cameras.txt"
+    elif os.path.exists(camDIR+"/cameras.bin"):
+        para2 = "--camera=" + camDIR + "/cameras.bin"
     else:
-        gt_path = PCC_sequence + "/" + class_selecte + "/renders/" + f"{frame:04d}"
+        print("没有camera文件")
 
-    gt = File.get_all_file_from_baseCatalog(".png", gt_path)
-    metric_path = output + "/__metrics.txt"
+    if os.path.exists(camDIR+"/images.txt"):
+        para3="--image="+camDIR+"/images.txt"
+    elif os.path.exists(camDIR+"/images.bin"):
+        para3 = "--image=" + camDIR + "/images.bin"
+    else:
+        print("没有image文件")
 
+    para4="--output="+output
+    para5="--verbose=1"
+    para = "%s %s %s %s %s %s" % (exe, para1, para2, para3, para4, para5)
+    r = subprocess.run(para, capture_output=True, text=True)
+
+def metrics(exe,src,dec,frame_start,frame_num,width,hight,num_view):
+
+    para1="-a "+src
+    para2="-b "+dec
+    para3="--width="+str(width)+" --height="+str(hight)
+
+    para4="-i "+str(frame_start)+" -f "+str(frame_num)
+
+    if frame_num==1:
+        para5 = ("--useCameraPosition=1"
+                 f" -s {save_iamge}"
+                 f" -n {num_view}")
+    else:
+        para5=("--useCameraPosition=1"
+           f" -s {save_iamge}"
+           f" --onlyViewpoint={onlyViewpoint}")
+
+    para = "%s %s %s %s %s %s" % (exe, para1, para2, para3, para4, para5)
+    r = subprocess.run(para, capture_output=True, text=True)
+
+    metric_path = str(Path(dec).parent.parent) + "/__metrics.txt"
     with open(metric_path, "w") as f:
-        for i in range(len(gt)):
-            # 测试rgb下PSNR
-            render=output+"/renders/"+gt[i].split("/")[-1]
-            para1 = "-i0 " + gt[i]
-            para2 = "-i1 " + render
-            para3 = "-ml PSNR"
-
-            image = plt.imread(gt[i])
-            height, width = image.shape[:2]
-            para4 = "-ps " + str(width) + "x" + str(height)
-            para5 = "-ff PNG"
-            para6 = "-cwa " + "1:1:1:0"
-            para7 = "-cws " + "1:1:1:0"
-
-            para = "%s %s %s %s %s %s %s %s" % (main, para1, para2, para3, para4, para5, para6, para7)
-
-            r = subprocess.run(para, capture_output=True, text=True)
-            print(r.stdout, file=f)
-
-            # 测试yuv下PSNR,SSIM,IVSSIM
-
-            para3 = "-ml PSNR,SSIM,IVSSIM"
-
-            para6 = "-csm YCbCr_BT709"
-            para = "%s %s %s %s %s %s %s" % (main, para1, para2, para3, para4, para5, para6)
-            r = subprocess.run(para, capture_output=True, text=True)
-            print(r.stdout, file=f)
-
-            # 计算LPIPPS
-
-            loss = lpips.LPIPS(net='alex',verbose=False)
-            img0 = lpips.im2tensor(lpips.load_image(gt[i]))
-            img1 = lpips.im2tensor(lpips.load_image(render))
-            d = loss(img0, img1)
-            print(">>>> LPIPS:" + str(np.array(d.data.cpu())[0, 0, 0, 0]), file=f)
-
-
+        print(r.stdout,file=f)
 
 class Gaussian:
     def __init__(self,PCC_sequence=PCC_sequence):
+
+        self.frames = range(0, 2)  # 起始帧，终止帧,指stable的起始帧与结束帧
+        self.fruitFrame = range(51, 52)
+
+        self.anchor_name="lift"
+        self.test_name="raht"
 # ======================================
 # 下面变量代码为测试的运行文件
+
         self.tmc13=str(tmc3_selected)+'_tmc3.exe'
 
 # ======================================
 # 下面变量代码短期不需要修改
 
-
         self.PCC_sequence=PCC_sequence
-
-        self.frames = range(0, 1)  # 起始帧，终止帧,指stable的起始帧与结束帧
-        self.breakfastFrame = range(0, 1)
-        self.fruitFrame = range(51, 52)
+        self.cameraPosition="example/cameraPosition.exe"
+        self.mpeg_gsc_metrics = "example/mpeg-gsc-metrics.exe"
         self.rate_points=["r01","r02","r03","r04",]
         #self.rate_points=["r01",]
 
-        self.anchor_name="anchor"
-        self.test_name="四元数-1"
+
 
         self.anchor_columns = {
             "PSNR-RGB": "F",  # PSNR-RGB 列
             "PSNR-YCbCr": "G",  # PSNR-YCbCr 列
             "SSIM-YCbCr": "H",  # SSIM-YCbCr 列
-            "IVSSIM": "I",  # IVSSIM 列
-            "LPIPS": "J"  # LPIPS 列
+            #"IVSSIM": "I",  # IVSSIM 列
+            #"LPIPS": "J"  # LPIPS 列
         }
 
         self.test_columns = {
-            "PSNR-RGB": "X",  # PSNR-RGB 列
-            "PSNR-YCbCr": "Y",  # PSNR-YCbCr 列
-            "SSIM-YCbCr": "Z",  # SSIM-YCbCr 列
-            "IVSSIM": "AA",  # IVSSIM 列
-            "LPIPS": "AB"  # LPIPS 列
+            "PSNR-RGB": "AD",  # PSNR-RGB 列
+            "PSNR-YCbCr": "AE",  # PSNR-YCbCr 列
+            "SSIM-YCbCr": "AF",  # SSIM-YCbCr 列
+            #"IVSSIM": "AA",  # IVSSIM 列
+            #"LPIPS": "AB"  # LPIPS 列
         }
 
         self.PSNR_start_row = 33
@@ -258,22 +265,34 @@ class Gaussian:
         "scaling":"K",
         "opacity":"L",
         "metadata":"M",
-        "Enc T [s]":"P",
-        "Dec T [s]":"Q",
+        "T_Enc":"P",
+        "T_Dec":"Q",
+        "G_Enc": "R",
+        "G_Dec": "S",
+        "A_Enc": "T",
+        "A_Dec": "U",
+        "maxRSS_Enc": "V",
+        "maxRSS_Dec": "W",
         }
 
         self.test_Bitstream_columns={
-        "position":"W",
-        "sh0":"X",
-        "sh1":"Y",
-        "sh2":"Z",
-        "sh3":"AA",
-        "rotation":"AB",
-        "scaling":"AC",
-        "opacity":"AD",
-        "metadata":"AE",
-        "Enc T [s]":"AH",
-        "Dec T [s]":"AI",
+        "position":"AC",
+        "sh0":"AD",
+        "sh1":"AE",
+        "sh2":"AF",
+        "sh3":"AG",
+        "rotation":"AH",
+        "scaling":"AI",
+        "opacity":"AJ",
+        "metadata":"AK",
+        "T_Enc":"AN",
+        "T_Dec":"AO",
+        "G_Enc": "AP",
+        "G_Dec": "AQ",
+        "A_Enc": "AR",
+        "A_Dec": "AS",
+        "maxRSS_Enc": "AT",
+        "maxRSS_Dec": "AU",
         }
 
 
@@ -301,17 +320,16 @@ class Gaussian:
 
     def run_with_anchor(self):
 
-        self.wb = openpyxl.load_workbook("ctc/anchor_tem.xlsm", keep_vba=True, read_only=False)
+        self.wb = openpyxl.load_workbook(template_excel, keep_vba=True, read_only=False)
         self.run()
         self.tmc=0
         self.tmc13 = '0_tmc3.exe'
         self.wb = openpyxl.load_workbook(branch_selected[0]+"/"+output_excel, keep_vba=True, read_only=False)
         self.run()
 
-
     def run(self):
             print("代码：" + self.tmc13)
-            thread_pool = multiprocessing.Pool(thread_num_limit[0])
+
 
         #清空分支
             if os.path.exists(branch_selected[0]):
@@ -319,86 +337,49 @@ class Gaussian:
 
         # ======================================
         # 编解码
-            
+            thread_pool = multiprocessing.Pool(thread_num_limit)
             for class_selecte in class_selected:
                 for track in tracks if class_selecte.find("stable")>=0 else [class_selecte]:
                     for rate_point in self.rate_points:
                         if class_selecte.find("stable")>=0:
                             frames=self.frames
-                        elif class_selecte=="breakfast":
-                            frames=self.breakfastFrame
                         else:
                             frames=self.fruitFrame
 
                         for frame in frames :
-                            #pass
-                            #self.sub_run(class_selecte, track, rate_point, frame,self.tmc13,self.tmc)
-                            thread_pool.apply_async(self.sub_run, args=(class_selecte,track,rate_point,frame,self.tmc13,self.tmc))
-
-
-            thread_pool.close()  # 关闭进程池入口，不再接受新进程插入
-            thread_pool.join()  # 主进程阻塞，等待进程池中的所有子进程结束，再继续运行主进程
-
-            # ======================================
-            # 渲染
-
-            thread_pool = multiprocessing.Pool(thread_num_limit[1])
-            for class_selecte in class_selected:
-                for track in tracks if class_selecte.find("stable")>=0 else [class_selecte]:
-                    for rate_point in self.rate_points:
-                        if class_selecte.find("stable") >= 0:
-                            frames = self.frames
-                        elif class_selecte == "breakfast":
-                            frames = self.breakfastFrame
-                        else:
-                            frames = self.fruitFrame
-
-                        for frame in frames:
-                            condition_selecte = condition_selected[list(condition_selected.keys())[0]]
-                            output = os.path.join(os.getcwd(), branch_selected[0], condition_selecte, class_selecte,
-                                                  track, rate_point, f"frame{frame:03d}")
 
                             if class_selecte.find("stable") >= 0:
                                 if class_selecte == "m71763_bartender_stable" or class_selecte == "m71763_breakdance_stable":
                                     cameras_name = f"/frame{frame:03d}"
                                 else:
                                     cameras_name = ""
-                            elif class_selecte == "breakfast":
-                                cameras_name = ""
                             else:
                                 cameras_name = f"/{frame:06d}/sparse/0"
 
-
-                            cameras_path=PCC_sequence+"/"+class_selecte+"/cameras"+cameras_name
-                            ply_path=output+"/dequantized.ply"
-                            output_dir=output+"/renders"
-                            thread_pool.apply_async(render, args=(cameras_path,ply_path,output_dir))
-                            #render(cameras_path,ply_path,output_dir)  # 渲染
-                            #metrics(output,class_selecte,track,frame)  # 计算失真
+                            cameras_path = PCC_sequence + "/" + class_selecte + "/cameras" + cameras_name
+                            #self.sub_run(class_selecte,track,rate_point,frame,self.tmc13,self.tmc,cameras_path,self.cameraPosition)
+                            thread_pool.apply_async(self.sub_run, args=(class_selecte,track,rate_point,frame,self.tmc13,self.tmc,cameras_path,self.cameraPosition))
 
             thread_pool.close()  # 关闭进程池入口，不再接受新进程插入
             thread_pool.join()  # 主进程阻塞，等待进程池中的所有子进程结束，再继续运行主进程
 
-            #======================================
-            # 失真
-            print("计算失真")
-            thread_pool = multiprocessing.Pool(thread_num_limit[2])
+        # ======================================
+        # 渲染 计算失真
+            thread_pool = multiprocessing.Pool(thread_num_limit)
             for class_selecte in class_selected:
                 for track in tracks if class_selecte.find("stable")>=0 else [class_selecte]:
                     for rate_point in self.rate_points:
                         if class_selecte.find("stable") >= 0:
                             frames = self.frames
-                        elif class_selecte == "breakfast":
-                            frames = self.breakfastFrame
                         else:
                             frames = self.fruitFrame
 
-                        for frame in frames:
-                            condition_selecte = condition_selected[list(condition_selected.keys())[0]]
-                            output = os.path.join(os.getcwd(), branch_selected[0], condition_selecte, class_selecte,
-                                                  track, rate_point, f"frame{frame:03d}")
-                            thread_pool.apply_async(metrics, args=(output,class_selecte,track,frame))
-                            #metrics(output,class_selecte,track,frame)  # 计算失真
+
+                        condition_selecte = condition_selected[list(condition_selected.keys())[0]]
+                        DIR=os.getcwd()+"/"+branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point
+
+                        thread_pool.apply_async(self.render, args=(frames,DIR,self.mpeg_gsc_metrics,class_selecte))
+
 
             thread_pool.close()  # 关闭进程池入口，不再接受新进程插入
             thread_pool.join()  # 主进程阻塞，等待进程池中的所有子进程结束，再继续运行主进程
@@ -406,9 +387,11 @@ class Gaussian:
             self.write_to_excel()      #写入excel
 
     @staticmethod
-    def sub_run(class_selecte,track,rate_point,frame,tmc13,tmc):
+    def sub_run(class_selecte,track,rate_point,frame,tmc13,tmc,cameras_path,cameraPosition):
+        frame_DIR=frame
+
         condition_selecte=condition_selected[list(condition_selected.keys())[0]]
-        output =  os.path.join(os.getcwd(),branch_selected[0],condition_selecte,class_selecte,track,rate_point,f"frame{frame:03d}")
+        output =  os.getcwd()+"/"+branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point+"/"+f"frame{frame:03d}"
         print("正在运行:"+os.path.join(branch_selected[0],condition_selecte,class_selecte,track,rate_point,f"frame{frame:03d}"))
         os.makedirs(output, exist_ok=True)
         frame=f"frame{frame:03d}" if class_selecte.find("stable")>=0 else f"{frame:04d}"
@@ -417,94 +400,35 @@ class Gaussian:
         encoder(output,rate_point,tmc13,tmc)  # 编码
         post_process(output)  # 后处理
 
+        pointCloud = PCC_sequence + "/" + class_selecte + "/" + track + "/" + frame + ".ply"
+
+        src_DIR=os.getcwd()+"/"+branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point+"/src"
+        dec_DIR = os.getcwd()+"/"+branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point+"/dec"
+        os.makedirs(src_DIR, exist_ok=True)
+        os.makedirs(dec_DIR, exist_ok=True)
+
+        cam_to_ply(pointCloud,cameras_path,cameraPosition,src_DIR+"/"+f"frame{frame_DIR:03d}"+".ply")
+        cam_to_ply(output + "/dequantized.ply", cameras_path, cameraPosition, dec_DIR + "/" + f"frame{frame_DIR:03d}" + ".ply")
+
+        shutil.rmtree(output)
+
         print("结束:" + os.path.join(branch_selected[0],condition_selecte,class_selecte,track,rate_point,frame))
 
-    def image_anchor(self):
+    @staticmethod
+    def render(frames,DIR,exe,class_selecte):
 
-        for class_selecte in class_selected:
-            if class_selecte.find("stable")>=0:
-                class_path=self.PCC_sequence+"/"+class_selecte+"/renders"
-                for track in tracks:
-                    track_path=class_path+"/"+track
-                    plys=os.listdir(self.PCC_sequence+"/"+class_selecte+"/"+track)
-                    if class_selecte=="m71763_bartender_stable" or class_selecte=="m71763_breakdance_stable":
-
-                        cameras=os.listdir(self.PCC_sequence+"/"+class_selecte+"/cameras")
-                        for i in range(len(plys)):
-                            if not os.path.exists(track_path+"/"+cameras[i]):
-                                os.makedirs(track_path+"/"+cameras[i], exist_ok=True)
-                                print(f"正在渲染:{class_selecte}/{track}/{plys[i]}")
-                                print(f"相机路径:cameras/{cameras[i]}")
-                                render(self.PCC_sequence+"/"+class_selecte+"/cameras/"+cameras[i],self.PCC_sequence+"/"+class_selecte+"/"+track+"/"+plys[i],track_path+"/"+cameras[i])
-
-                    else:
-
-                        cameras = self.PCC_sequence + "/" + class_selecte + "/cameras"
-                        for i in range(len(plys)):
-                            if not os.path.exists(track_path + "/" + plys[i].split(".")[0]):
-                                os.makedirs(track_path + "/" + plys[i].split(".")[0], exist_ok=True)
-                                print(f"正在渲染:{class_selecte}/{track}/{plys[i]}")
-                                print(f"相机路径:cameras/{cameras}")
-                                render(cameras,
-                                       self.PCC_sequence + "/" + class_selecte + "/" + track + "/" + plys[i],
-                                       track_path + "/" + plys[i].split(".")[0])
-
-            elif class_selecte=="breakfast":
-                class_path = self.PCC_sequence + "/" + class_selecte + "/renders"
-                plys = os.listdir(self.PCC_sequence + "/" + class_selecte + "/" + class_selecte)
-                for i in range(len(plys)):
-                    if not plys[i].split(".")[-1] == "ply":
-                        continue
-                    frame=plys[i].split(".")[0]
-                    if not os.path.exists(class_path + "/" + frame):
-                        os.makedirs(class_path + "/" + frame, exist_ok=True)
-                        print(f"正在渲染:{class_selecte}/{plys[i]}")
-                        print(f"相机路径:/cameras")
-                        render(self.PCC_sequence + "/" + class_selecte + "/cameras",
-                               self.PCC_sequence + "/" + class_selecte + "/" + class_selecte + "/" + plys[i],
-                               class_path + "/" + frame)
-
-
-            else:
-                class_path=self.PCC_sequence+"/"+class_selecte+"/renders"
-                plys=os.listdir(self.PCC_sequence+"/"+class_selecte+"/"+class_selecte)
-
-                for i in range(len(plys)):
-                        if not plys[i].split(".")[-1]=="ply":
-                            continue
-                        camera=plys[i].split(".")[0]
-                        if not os.path.exists(class_path+"/"+camera):
-                            os.makedirs(class_path+"/"+camera, exist_ok=True)
-                            print(f"正在渲染:{class_selecte}/{plys[i]}")
-                            print(f"相机路径:cameras/{camera}")
-                            render(self.PCC_sequence+"/"+class_selecte+"/cameras/00"+camera+"/sparse/0",self.PCC_sequence+"/"+class_selecte+"/"+class_selecte+"/"+plys[i],class_path+"/"+camera)
+        src=DIR+"/src/"+"frame"+"%03d" + ".ply"
+        dec=DIR+"/dec/"+"frame"+"%03d" + ".ply"
+        metrics(exe,src,dec,frames[0],len(frames),seq_information[class_selecte][0],seq_information[class_selecte][1],seq_information[class_selecte][2])
 
 
     def write_to_excel(self):
-
-        # ======================================
-        # 创建sheet
-        #self.create_sheet()
-
-
         # ======================================
         # 写入PSNR
-        # ======================================
         metrics_path=File.get_all_file_from_baseCatalog("__metrics.txt",branch_selected[0])
-        metrics_data=dict()
+        metrics_data=[]
         for path in metrics_path:
-            frameId=int(path.split("/")[-2].split("frame")[1])
-            class_selecte = path.split("/")[-5]
-
-            if class_selecte.find("stable") >= 0:
-                frames = self.frames
-            elif class_selecte == "breakfast":
-                frames = self.breakfastFrame
-            else:
-                frames = self.fruitFrame
-
-            if frameId in frames:
-                metrics_data[path]=self.extract_metrics(path)
+            metrics_data.append(self.extract_metrics(path))
 
         self.sub_write_to_excel(metrics_data)
 
@@ -514,24 +438,21 @@ class Gaussian:
         # ======================================
         bitstream_files=File.get_all_file_from_baseCatalog("__Bitbream__encoder.txt",branch_selected[0])
         for bitstream_file in bitstream_files:
-            frameId = int(bitstream_file.split("/")[-2].split("frame")[1])
+            frameId = int(bitstream_file.split("/")[-1].split("frame")[1].split("__")[0])
             class_selecte = bitstream_file.split("/")[-5]
 
             if class_selecte.find("stable") >= 0:
                 frames = self.frames
-            elif class_selecte == "breakfast":
-                frames = self.breakfastFrame
             else:
                 frames = self.fruitFrame
 
             if frameId in frames:
-                labels=bitstream_file.split("/")
-                increase_row=int(labels[-1][1:3])-1
 
                 parsed_data = self.parse_bitstream(bitstream_file)
                 aggregated = self.aggregate_attributes(parsed_data)
                 self.sub_bitstream_write_to_excel(aggregated,bitstream_file)
 
+        self.set_name()
 
         # 保存为新文件（保留宏）
         self.wb.save(branch_selected[0]+"/"+output_excel)
@@ -540,38 +461,24 @@ class Gaussian:
         os.makedirs("32F-geo", exist_ok=True)
         self.wb.save("1F-geo/"+output_excel)
 
-
 # ======================================
 # 步骤 1：从 metrics.txt 提取数据
 # ======================================
     def extract_metrics(self,file_path):
-        data = dict(dict())
+        data=dict()
         PSNR = dict()
-        class_=file_path.split("/")[-5]
         with open(file_path, "r") as f:
             contents = f.readlines()
+
         for content in contents:
-            if content.find("InputFile0        = ")>=0:
-                if class_.find("stable") >= 0:
-                    v=int(content.split("/")[-1].split(".")[0].split("v")[1])
-                elif class_ == "breakfast":
-                    v=int(content.split("/")[-1].split(".")[0].split("_")[1])-1
-                else:
-                    v=int(content.split("/")[-1].split("_")[1])-1
+            if content.find("Psnr RGB (avg)")>=0:
+                PSNR["PSNR-RGB"]=float(content.split()[4])
+            elif content.find("Psnr YUV (wavg)")>=0:
+                PSNR["PSNR-YCbCr"]=float(content.split()[4])
+            elif content.find("SSIM Avg")>=0:
+                PSNR["SSIM-YCbCr"]=float(content.split()[3])
 
-            elif content.find("Average          PSNR-RGB        ")>=0:
-                PSNR["PSNR-RGB"]=float(content.split()[2])
-            elif content.find("Average          PSNR-YCbCr      ")>=0:
-                PSNR["PSNR-YCbCr"]=float(content.split()[2])
-            elif content.find("Average          SSIM-YCbCr     ")>=0:
-                PSNR["SSIM-YCbCr"]=float(content.split()[2])
-            elif content.find("Average        IVSSIM           ")>=0:
-                PSNR["IVSSIM"]=float(content.split()[2])
-            elif content.find(">>>> LPIPS:")>=0:
-                PSNR["LPIPS"]=float(content.split(":")[1])
-                data[f"v__{v}"]=PSNR
-                PSNR = dict()
-
+        data[file_path]=PSNR
         return data
 
 
@@ -586,33 +493,21 @@ class Gaussian:
         # 示例：假设表头在行1，数据从行2开始
         start_row = self.PSNR_start_row
         # 按图像编号顺序写入数据
-        for path in metrics_data.keys():
-            labels=path.split("/")
-            increase_row=int(labels[-3][1:3])-1
+        for path in metrics_data:
+            key=list(path.keys())[0]
+            labels=key.split("/")
+            increase_row=int(labels[-2][1:3])-1
 
-            if labels[-5].find("stable") >= 0:
-                frames = self.frames
-            elif labels[-5] == "breakfast":
-                frames = self.breakfastFrame
-            else:
-                frames = self.fruitFrame
+            _class = labels[-4].split("_")[1] if labels[-4].find("stable")>=0 else labels[-4]
+            track=labels[-3]
+            sheet_name = f'{_class}_{self.tracks_name[track]}' if labels[-4].find("stable")>=0 else f'{_class}'
 
-            _class = labels[-5].split("_")[1] if labels[-5].find("stable")>=0 else labels[-5]
-            track=labels[-4]
-            sheet_name = f'{_class}_{self.tracks_name[track]}' if labels[-5].find("stable")>=0 else f'{_class}'
-
-            for view in sorted(metrics_data[path].keys()):
-                row = start_row + 5*int(view[3:])+increase_row# 假设数据按顺序排列
-                data = metrics_data[path][view]
-                ws=self.wb[sheet_name]
-                # 写入指标数据（保留原始精度）
-                for key in columns.keys():
-                    a=ws[f'{columns[key]}{row}'].value
-                    if a is None:
-                        ws[f'{columns[key]}{row}']=0
-                        ws[f'{columns[key]}{row}'].value += data[key]/len(frames)
-                    else:
-                        ws[f'{columns[key]}{row}'].value += data[key]/len(frames)
+            row = start_row +increase_row# 假设数据按顺序排列
+            data = path[key]
+            ws=self.wb[sheet_name]
+            # 写入指标数据（保留原始精度）
+            for key in columns.keys():
+                ws[f'{columns[key]}{row}'].value = data[key]
 
 
 # ======================================
@@ -621,6 +516,10 @@ class Gaussian:
     def parse_bitstream(self,file_path):
         """使用正则表达式解析比特流文件"""
         attributes = dict()
+        attributes["e-gtime"]=0
+        attributes["e-atime"]=0
+        attributes["d-gtime"]=0
+        attributes["d-atime"]=0;
         pattern = re.compile(r'^(\w+).*bitstream size (\d+) B \((\d+\.\d+) bpp\)')
 
         with open(file_path, 'r') as f:
@@ -656,6 +555,17 @@ class Gaussian:
                     encoder_time = float(match.group(1))  # 字节数
                     attributes["encoder Processing time (user):"] = encoder_time
 
+        with open(file_path, 'r') as f:
+            for l in f:
+                line=l.split()
+                if len(line)<5:
+                    continue
+                if line[1]=="processing" and line[2]=="time":
+                    if line[0]=="positions":
+                        attributes["e-gtime"] += float(line[4])
+                    else:
+                        attributes["e-atime"]+=float(line[4])
+
 
         decode_path=file_path.split("__Bitbream__encoder.txt")[0]+"__Bitbream__decoder.txt"
 
@@ -667,6 +577,17 @@ class Gaussian:
                     decoder_time = float(match.group(1))  # 字节数
                     attributes["decoder Processing time (user):"] = decoder_time
 
+        with open(file_path, 'r') as f:
+            for l in f:
+                line=l.split()
+                if len(line)<5:
+                    continue
+                if line[1]=="processing" and line[2]=="time":
+                    if line[0]=="positions":
+                        attributes["d-gtime"] += float(line[4])
+                    else:
+                        attributes["d-atime"]+=float(line[4])
+
         return attributes
 
 # ======================================
@@ -675,7 +596,6 @@ class Gaussian:
     def aggregate_attributes(self,attrs):
         """聚合属性到指定分类"""
         #第一中定义：我认为的
-        '''
         sh1=["f_rest_0s","f_rest_1s","f_rest_2s",
              "f_rest_15s","f_rest_16s","f_rest_17s",
              "f_rest_30s","f_rest_31s","f_rest_32s"]
@@ -685,8 +605,9 @@ class Gaussian:
         sh3=["f_rest_8s","f_rest_9s","f_rest_10s","f_rest_11s","f_rest_12s","f_rest_13s","f_rest_14s",
              "f_rest_23s","f_rest_24s","f_rest_25s","f_rest_26s","f_rest_27s","f_rest_28s","f_rest_29s",
              "f_rest_38s","f_rest_39s","f_rest_40s","f_rest_41s","f_rest_42s","f_rest_43s","f_rest_44s"]
+
+        #第二种定义：通过结果推理出的
         '''
-        #第二种定义：通过结果推理出的（大概率这种是正确的，但不清楚）
         sh1=[]
         sh2=[]
         sh3=[]
@@ -696,6 +617,7 @@ class Gaussian:
             sh2.append(f"f_rest_{str(i)}s")
         for i in range(24,45):
             sh3.append(f"f_rest_{str(i)}s")
+        '''
 
         return {
             "position": sum(attrs[k] for k in attrs.keys() if k.startswith("positions")),
@@ -707,22 +629,24 @@ class Gaussian:
             "scaling": sum(attrs[k] for k in attrs.keys() if k.startswith("scale_")),
             "opacity": sum(attrs[k] for k in attrs.keys() if k.startswith("opacity")),
             "metadata": attrs["metadata"],  # 元数据占位符
-            "Enc T [s]":attrs["encoder Processing time (user):"],
-            "Dec T [s]":attrs["decoder Processing time (user):"],
+            "T_Enc":attrs["encoder Processing time (user):"],
+            "T_Dec":attrs["decoder Processing time (user):"],
+            "G_Enc": attrs["e-gtime"],
+            "G_Dec": attrs["d-gtime"],
+            "A_Enc": attrs["e-atime"],
+            "A_Dec": attrs["d-atime"],
         }
 
 # ======================================
 # 步骤 5：编码比特写入
 # ======================================
     def sub_bitstream_write_to_excel(self,data,bitstream_file):
-        labels=bitstream_file.split("/")
-
         # 列映射关系
         columns = self.test_Bitstream_columns if self.tmc else self.anchor_Bitstream_columns
-
+        attrs=["position","sh0","sh1", "sh2", "sh3","rotation","scaling","opacity","metadata"]
         # 定义数据列的起始位置（根据你的 Excel 模板调整）
         # 示例：假设表头在行1，数据从行2开始
-        start_row = 16
+        start_row = self.Bitstream_start_row
         labels = bitstream_file.split("/")
         increase_row = int(labels[-3][1:3]) - 1
 
@@ -737,63 +661,15 @@ class Gaussian:
             a = ws[f'{columns[key]}{row}'].value
             if a is None:
                 ws[f'{columns[key]}{row}'] = 0
-                if key=="Enc T [s]" or key=="Dec T [s]":
-                    ws[f'{columns[key]}{row}'].value += data[key]
+                if key in attrs:
+                    ws[f'{columns[key]}{row}'].value += data[key]*8/1000
                 else:
-                    ws[f'{columns[key]}{row}'].value += data[key] * 8 / 1000
-            else:
-                if key=="Enc T [s]" or key=="Dec T [s]":
                     ws[f'{columns[key]}{row}'].value += data[key]
-                else:
-                    ws[f'{columns[key]}{row}'].value += data[key] * 8 / 1000
-
-
-    def create_sheet(self,anchor="MPEG-151",test="my"):
-        row=4
-        row_main=9
-        self.wb = openpyxl.load_workbook(r"C:\Users\31046\Desktop\GPCC_encoder_3dgs\ctc\empty.xlsm", keep_vba=True, read_only=False)
-        self.wb["Summary (auto)"].cell(row=3, column=3).value = anchor
-        self.wb["Summary (auto)"].cell(row=4, column=3).value = test
-
-        # 获取源工作表
-        source_sheet = self.wb['M_NC5']
-
-        sheets=["RGB-PSNR","YUV-PSNR","YUV-SSIM","YUV-IVSSIM","LPIPS"]
-        for class_selecte in class_selected:
-
-            if class_selecte.find("stable")>=0:
-                for track in tracks:
-                    new_sheet = self.wb.copy_worksheet(source_sheet)
-                    _class=class_selecte.split("_")[1]
-                    sheet_name=f'{_class}_{self.tracks_name[track]}'
-                    new_sheet.title = sheet_name
-                    new_sheet.cell(row=2,column=2).value =sheet_name
-                    # 写入指标数据（保留原始精度）
-                    for sheet in sheets:
-                        self.wb[sheet].cell(row=row,column=2).value = sheet_name
-
-                    self.wb["Summary (auto)"].cell(row=row_main,column=3).value =sheet_name
-                    row=row+11
-                    row_main=row_main+1
-
             else:
-                new_sheet = self.wb.copy_worksheet(source_sheet)
-                _class = class_selecte
-                sheet_name = f'{_class}'
-                new_sheet.title = sheet_name
-                new_sheet.cell(row=2, column=2).value = sheet_name
-                # 写入指标数据（保留原始精度）
-                for sheet in sheets:
-                    self.wb[sheet].cell(row=row, column=2).value = sheet_name
-
-                self.wb["Summary (auto)"].cell(row=row_main, column=3).value = sheet_name
-                row = row + 11
-                row_main = row_main + 1
-
-
-        self.wb.remove(self.wb['M_NC5'])
-        self.wb.save("ctc/" + "anchor_tem.xlsm")
-
+                if key in attrs:
+                    ws[f'{columns[key]}{row}'].value += data[key] * 8 / 1000
+                else:
+                    ws[f'{columns[key]}{row}'].value += data[key]
 
     #第一个num表示other中的anchor还是test，第二个同理
     def copy_to_excel(self,other,my,num0,num1):
@@ -837,9 +713,4 @@ class Gaussian:
 
 
 if __name__ == '__main__':
-    names=["RAHT小数精度变为17--防溢出","RAHT小数精度变为19--防溢出"]
-    for name in names:
-        output_excel=name+".xlsm"
-        g = Gaussian()
-        g.tmc13="tmc13/"+name+".exe"
-        g.run()
+    pass
