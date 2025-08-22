@@ -52,8 +52,8 @@ tmc3_selected = 1
 
 # 输入文件路径
 template_excel = "ctc/empty.xlsm"  # 带宏的 Excel 模板
-output_excel="lift__vs__raht.xlsm"
-thread_num_limit=8                     #编码、计算失真的进程数
+output_excel="MPEG151-opt-Raht.xlsm"
+thread_num_limit=1                     #编码、计算失真的进程数
 
 
 PCC_sequence=r'D:\pcc_sequence\MPEG_3DGS'
@@ -67,7 +67,7 @@ onlyViewpoint=1
 
 # 渲染图像的宽、高、视角数
 seq_information = {
-    "ManWithFruit": [3840, 2160, 24],
+    "ManWithFruit": [1920, 1080, 24],
     "m71763_breakfast_stable": [1920, 1080, 15],
     "m71763_cinema_stable": [1920, 1080, 21],
     "m71763_bartender_stable": [1920, 1080, 21],
@@ -216,11 +216,11 @@ def metrics(exe,src,dec,frame_start,frame_num,width,hight,num_view):
 class Gaussian:
     def __init__(self,PCC_sequence=PCC_sequence):
 
-        self.frames = range(0, 2)  # 起始帧，终止帧,指stable的起始帧与结束帧
-        self.fruitFrame = range(51, 52)
+        self.frames = range(0, 1)  # 起始帧，终止帧,指stable的起始帧与结束帧
+        self.fruitFrame = range(81, 82)
 
-        self.anchor_name="lift"
-        self.test_name="raht"
+        self.anchor_name="MPEG151"
+        self.test_name="opt-raht"
 # ======================================
 # 下面变量代码为测试的运行文件
 
@@ -232,9 +232,7 @@ class Gaussian:
         self.PCC_sequence=PCC_sequence
         self.cameraPosition="example/cameraPosition.exe"
         self.mpeg_gsc_metrics = "example/mpeg-gsc-metrics.exe"
-        self.rate_points=["r01","r02","r03","r04",]
-        #self.rate_points=["r01",]
-
+        self.rate_points=["r01","r02","r03","r04","r05"]
 
 
         self.anchor_columns = {
@@ -421,7 +419,6 @@ class Gaussian:
         dec=DIR+"/dec/"+"frame"+"%03d" + ".ply"
         metrics(exe,src,dec,frames[0],len(frames),seq_information[class_selecte][0],seq_information[class_selecte][1],seq_information[class_selecte][2])
 
-
     def write_to_excel(self):
         # ======================================
         # 写入PSNR
@@ -471,11 +468,13 @@ class Gaussian:
             contents = f.readlines()
 
         for content in contents:
+            if content.find("OM-")>=0:         #跳过OM-PSNE,OM-IVSSIM、、
+                continue
             if content.find("Psnr RGB (avg)")>=0:
                 PSNR["PSNR-RGB"]=float(content.split()[4])
-            elif content.find("Psnr YUV (wavg)")>=0:
+            elif content.find("Psnr YUV (avg)")>=0:
                 PSNR["PSNR-YCbCr"]=float(content.split()[4])
-            elif content.find("SSIM Avg")>=0:
+            elif content.find("SSIM (avg)")>=0:
                 PSNR["SSIM-YCbCr"]=float(content.split()[3])
 
         data[file_path]=PSNR
@@ -558,6 +557,8 @@ class Gaussian:
         with open(file_path, 'r') as f:
             for l in f:
                 line=l.split()
+                if l.find("峰值内存")>=0:
+                    attributes["e-MaxRSS"] = int(line[1])
                 if len(line)<5:
                     continue
                 if line[1]=="processing" and line[2]=="time":
@@ -565,6 +566,8 @@ class Gaussian:
                         attributes["e-gtime"] += float(line[4])
                     else:
                         attributes["e-atime"]+=float(line[4])
+
+
 
 
         decode_path=file_path.split("__Bitbream__encoder.txt")[0]+"__Bitbream__decoder.txt"
@@ -577,9 +580,11 @@ class Gaussian:
                     decoder_time = float(match.group(1))  # 字节数
                     attributes["decoder Processing time (user):"] = decoder_time
 
-        with open(file_path, 'r') as f:
+        with open(decode_path, 'r') as f:
             for l in f:
                 line=l.split()
+                if l.find("峰值内存")>=0:
+                    attributes["d-MaxRSS"] = int(line[1])
                 if len(line)<5:
                     continue
                 if line[1]=="processing" and line[2]=="time":
@@ -588,6 +593,7 @@ class Gaussian:
                     else:
                         attributes["d-atime"]+=float(line[4])
 
+
         return attributes
 
 # ======================================
@@ -595,7 +601,22 @@ class Gaussian:
 # ======================================
     def aggregate_attributes(self,attrs):
         """聚合属性到指定分类"""
-        #第一中定义：我认为的
+
+        # 第一种定义：通过结果推理出的
+        '''
+        sh1=["f_rest_0s","f_rest_1s","f_rest_2s",
+             "f_rest_15s","f_rest_16s","f_rest_17s",
+             "f_rest_30s","f_rest_31s","f_rest_32s"]
+        sh2=["f_rest_3s","f_rest_4s","f_rest_5s","f_rest_6s",
+             "f_rest_18s","f_rest_19s","f_rest_20s","f_rest_21s",
+             "f_rest_33s","f_rest_34s","f_rest_35s","f_rest_36s"]
+        sh3=["f_rest_7s","f_rest_8s","f_rest_9s","f_rest_10s","f_rest_11s","f_rest_12s","f_rest_13s","f_rest_14s",
+             "f_rest_22s","f_rest_23s","f_rest_24s","f_rest_25s","f_rest_26s","f_rest_27s","f_rest_28s","f_rest_29s",
+             "f_rest_37s","f_rest_38s","f_rest_39s","f_rest_40s","f_rest_41s","f_rest_42s","f_rest_43s","f_rest_44s"]
+        '''
+
+        # 第二种定义：我认为的
+
         sh1=["f_rest_0s","f_rest_1s","f_rest_2s",
              "f_rest_15s","f_rest_16s","f_rest_17s",
              "f_rest_30s","f_rest_31s","f_rest_32s"]
@@ -606,27 +627,15 @@ class Gaussian:
              "f_rest_23s","f_rest_24s","f_rest_25s","f_rest_26s","f_rest_27s","f_rest_28s","f_rest_29s",
              "f_rest_38s","f_rest_39s","f_rest_40s","f_rest_41s","f_rest_42s","f_rest_43s","f_rest_44s"]
 
-        #第二种定义：通过结果推理出的
-        '''
-        sh1=[]
-        sh2=[]
-        sh3=[]
-        for i in range(9):
-            sh1.append(f"f_rest_{str(i)}s")
-        for i in range(9,24):
-            sh2.append(f"f_rest_{str(i)}s")
-        for i in range(24,45):
-            sh3.append(f"f_rest_{str(i)}s")
-        '''
 
         return {
             "position": sum(attrs[k] for k in attrs.keys() if k.startswith("positions")),
-            "sh0": sum(attrs[k] for k in attrs.keys() if k.startswith("f_dc_")),
-            "sh1": sum(attrs[k] for k in attrs.keys() if k in sh1),
-            "sh2": sum(attrs[k] for k in attrs.keys() if k in sh2),
-            "sh3": sum(attrs[k] for k in attrs.keys() if k in sh3),
-            "rotation": sum(attrs[k] for k in attrs.keys() if k.startswith("rot_")),
-            "scaling": sum(attrs[k] for k in attrs.keys() if k.startswith("scale_")),
+            "sh0": sum(attrs[k] for k in attrs.keys() if (k.startswith("f_dc_")) or k.startswith("SH0")),
+            "sh1": sum(attrs[k] for k in attrs.keys() if k in sh1 or k.startswith("SH1")),
+            "sh2": sum(attrs[k] for k in attrs.keys() if k in sh2 or k.startswith("SH2")),
+            "sh3": sum(attrs[k] for k in attrs.keys() if k in sh3 or k.startswith("SH3")),
+            "rotation": sum(attrs[k] for k in attrs.keys() if k.startswith("rot")),
+            "scaling": sum(attrs[k] for k in attrs.keys() if k.startswith("scale")),
             "opacity": sum(attrs[k] for k in attrs.keys() if k.startswith("opacity")),
             "metadata": attrs["metadata"],  # 元数据占位符
             "T_Enc":attrs["encoder Processing time (user):"],
@@ -662,12 +671,12 @@ class Gaussian:
             if a is None:
                 ws[f'{columns[key]}{row}'] = 0
                 if key in attrs:
-                    ws[f'{columns[key]}{row}'].value += data[key]*8/1000
+                    ws[f'{columns[key]}{row}'].value += data[key]
                 else:
                     ws[f'{columns[key]}{row}'].value += data[key]
             else:
                 if key in attrs:
-                    ws[f'{columns[key]}{row}'].value += data[key] * 8 / 1000
+                    ws[f'{columns[key]}{row}'].value += data[key]
                 else:
                     ws[f'{columns[key]}{row}'].value += data[key]
 
@@ -682,7 +691,7 @@ class Gaussian:
 
 
         sheetnames=other.get_sheet_names()
-        for i in range(6,len(sheetnames)):
+        for i in range(4,len(sheetnames)):
             sheetname=sheetnames[i]
             ws0 = other[sheetname]
             ws1 = my[sheetname]
@@ -692,12 +701,13 @@ class Gaussian:
                 for key in columns1:
                     ws1[f'{columns1[key]}{row}'].value = ws0[f'{columns0[key]}{row}'].value
 
+
         columns0 = self.test_columns if num0 else self.anchor_columns
         columns1 = self.test_columns if num1 else self.anchor_columns
 
 
         start_row = self.PSNR_start_row
-        for i in range(6,len(sheetnames)):
+        for i in range(4,len(sheetnames)):
             sheetname=sheetnames[i]
             ws0 = other[sheetname]
             ws1 = my[sheetname]
@@ -713,4 +723,11 @@ class Gaussian:
 
 
 if __name__ == '__main__':
-    pass
+    p = "1F-geo/"
+    g = Gaussian()
+    output_excel = "MPEG151-octree.xlsm"
+    g.copy_to_excel(p + "MPEG151-octree__vs__MPEG151-octree.xlsm","ctc/empty.xlsm",1,0)
+    output_excel = "MPEG151-octree__vs__MPEG151-octree-opt.xlsm"
+    g.copy_to_excel(p + "MPEG151-octree-opt.xlsm", p + "MPEG151-octree.xlsm", 1, 1)
+    output_excel = "MPEG151-octree__vs__MPEG151-lift.xlsm"
+    g.copy_to_excel(p + "MPEG151-lift.xlsm", p + "MPEG151-octree.xlsm", 0, 1)
