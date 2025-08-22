@@ -34,10 +34,10 @@ condition_selected = {
 
 # 点云类别，目前这个变量没有使用
 class_selected = (
-    #"ManWithFruit",
+    "ManWithFruit",
     "m71763_breakfast_stable",
-    #"m71763_cinema_stable",
-    #"m71763_bartender_stable",
+    "m71763_cinema_stable",
+    "m71763_bartender_stable",
 )
 
 #1F-geom测试条件没有半track
@@ -53,7 +53,7 @@ tmc3_selected = 1
 # 输入文件路径
 template_excel = "ctc/empty.xlsm"  # 带宏的 Excel 模板
 output_excel="MPEG151-opt-Raht.xlsm"
-thread_num_limit=1                     #编码、计算失真的进程数
+thread_num_limit=10                     #编码、计算失真的进程数
 
 
 PCC_sequence=r'D:\pcc_sequence\MPEG_3DGS'
@@ -216,8 +216,8 @@ def metrics(exe,src,dec,frame_start,frame_num,width,hight,num_view):
 class Gaussian:
     def __init__(self,PCC_sequence=PCC_sequence):
 
-        self.frames = range(0, 1)  # 起始帧，终止帧,指stable的起始帧与结束帧
-        self.fruitFrame = range(81, 82)
+        self.frames = range(0, 32)  # 起始帧，终止帧,指stable的起始帧与结束帧
+        self.fruitFrame = range(81, 351)
 
         self.anchor_name="MPEG151"
         self.test_name="opt-raht"
@@ -233,7 +233,7 @@ class Gaussian:
         self.cameraPosition="example/cameraPosition.exe"
         self.mpeg_gsc_metrics = "example/mpeg-gsc-metrics.exe"
         self.rate_points=["r01","r02","r03","r04","r05"]
-
+        self.complute_PSNR=0                             #该参数决定是否进行metrics的计算
 
         self.anchor_columns = {
             "PSNR-RGB": "F",  # PSNR-RGB 列
@@ -375,14 +375,17 @@ class Gaussian:
 
                         condition_selecte = condition_selected[list(condition_selected.keys())[0]]
                         DIR=os.getcwd()+"/"+branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point
-
-                        thread_pool.apply_async(self.render, args=(frames,DIR,self.mpeg_gsc_metrics,class_selecte))
+                        if self.complute_PSNR:
+                            thread_pool.apply_async(self.render, args=(frames,DIR,self.mpeg_gsc_metrics,class_selecte))
 
 
             thread_pool.close()  # 关闭进程池入口，不再接受新进程插入
             thread_pool.join()  # 主进程阻塞，等待进程池中的所有子进程结束，再继续运行主进程
 
-            self.write_to_excel()      #写入excel
+            if self.complute_PSNR:
+                self.write_to_excel()      #写入excel
+            else:
+                self.display()
 
     @staticmethod
     def sub_run(class_selecte,track,rate_point,frame,tmc13,tmc,cameras_path,cameraPosition):
@@ -721,13 +724,27 @@ class Gaussian:
 
         my.save("1F-geo/" + output_excel)
 
+    #播放点云
+    def display(self,r="r01"):
+        main="./example/PccAppRenderer.exe"
+        for class_selecte in class_selected:
+            for track in tracks if class_selecte.find("stable") >= 0 else [class_selecte]:
+
+                condition_selecte = condition_selected[list(condition_selected.keys())[0]]
+                DIR=branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+r+"/dec/"
+
+                if class_selecte.find("stable") >= 0:
+                    frames = self.frames
+                else:
+                    frames = self.fruitFrame
+
+                cmp= f"{main} -d {DIR} -n {len(frames)} -g 1 --fps=5 --play=1"
+
+                subprocess.Popen(cmp)
+
 
 if __name__ == '__main__':
     p = "1F-geo/"
     g = Gaussian()
-    output_excel = "MPEG151-octree.xlsm"
-    g.copy_to_excel(p + "MPEG151-octree__vs__MPEG151-octree.xlsm","ctc/empty.xlsm",1,0)
-    output_excel = "MPEG151-octree__vs__MPEG151-octree-opt.xlsm"
-    g.copy_to_excel(p + "MPEG151-octree-opt.xlsm", p + "MPEG151-octree.xlsm", 1, 1)
-    output_excel = "MPEG151-octree__vs__MPEG151-lift.xlsm"
-    g.copy_to_excel(p + "MPEG151-lift.xlsm", p + "MPEG151-octree.xlsm", 0, 1)
+    output_excel = "MPEG151-lift__vs__MPEG151-octree-opt.xlsm"
+    g.copy_to_excel( p + "MPEG151-lift.xlsm",p + "MPEG151-octree-opt.xlsm", 0, 0)
