@@ -12,6 +12,13 @@ import shutil
 from my_tools import File
 import multiprocessing
 
+# 待测试的编解码器,str(tmc3_selected)+'_tmc3.exe'为对应文件
+tmc3_selected = 0
+
+# 输入文件路径
+template_excel = "ctc/empty.xlsm"  # 带宏的 Excel 模板
+output_excel="MPEG-Pre.xlsm"
+
 
 # 测试分支，注意：此处请单选
 branch_selected = (
@@ -46,14 +53,8 @@ tracks=(
     #"partially-track",
 )
 
-# 待测试的编解码器,str(tmc3_selected)+'_tmc3.exe'为对应文件
-tmc3_selected = 1
 
-
-# 输入文件路径
-template_excel = "ctc/empty.xlsm"  # 带宏的 Excel 模板
-output_excel="MPEG151-opt-Raht.xlsm"
-thread_num_limit=10                     #编码、计算失真的进程数
+thread_num_limit=[10,3]                     #编码、计算失真的进程数
 
 
 PCC_sequence=r'D:\pcc_sequence\MPEG_3DGS'
@@ -113,7 +114,7 @@ def pre_process(output,class_selecte,track,frame):
     write3DG_ply(q_pos, q_sh, q_opacity, q_scale, q_rot, False, file_quantized, tqdm)
 
 def post_process(output):
-    file_decoded = Path(output + "/decoder.ply")  # input: the PLY file of the decoded frame
+    file_decoded = Path(output + "/quantized.ply")  # input: the PLY file of the decoded frame
     file_config = Path(output + "/quantized.json")  # input: json file containing the informarion necessary to inverse the quantization
     file_dequantized = Path(output + "/dequantized.ply")  # output: PLY file of the dequantized decoded frame
 
@@ -216,8 +217,8 @@ def metrics(exe,src,dec,frame_start,frame_num,width,hight,num_view):
 class Gaussian:
     def __init__(self,PCC_sequence=PCC_sequence):
 
-        self.frames = range(0, 32)  # 起始帧，终止帧,指stable的起始帧与结束帧
-        self.fruitFrame = range(81, 351)
+        self.frames = range(0, 1)  # 起始帧，终止帧,指stable的起始帧与结束帧
+        self.fruitFrame = range(81, 82)
 
         self.anchor_name="MPEG151"
         self.test_name="opt-raht"
@@ -233,7 +234,7 @@ class Gaussian:
         self.cameraPosition="example/cameraPosition.exe"
         self.mpeg_gsc_metrics = "example/mpeg-gsc-metrics.exe"
         self.rate_points=["r01","r02","r03","r04","r05"]
-        self.complute_PSNR=0                             #该参数决定是否进行metrics的计算
+        self.complute_PSNR=1                             #该参数决定是否进行metrics的计算
 
         self.anchor_columns = {
             "PSNR-RGB": "F",  # PSNR-RGB 列
@@ -335,7 +336,7 @@ class Gaussian:
 
         # ======================================
         # 编解码
-            thread_pool = multiprocessing.Pool(thread_num_limit)
+            thread_pool = multiprocessing.Pool(thread_num_limit[0])
             for class_selecte in class_selected:
                 for track in tracks if class_selecte.find("stable")>=0 else [class_selecte]:
                     for rate_point in self.rate_points:
@@ -363,7 +364,7 @@ class Gaussian:
 
         # ======================================
         # 渲染 计算失真
-            thread_pool = multiprocessing.Pool(thread_num_limit)
+            thread_pool = multiprocessing.Pool(thread_num_limit[1])
             for class_selecte in class_selected:
                 for track in tracks if class_selecte.find("stable")>=0 else [class_selecte]:
                     for rate_point in self.rate_points:
@@ -398,7 +399,7 @@ class Gaussian:
         frame=f"frame{frame:03d}" if class_selecte.find("stable")>=0 else f"{frame:04d}"
 
         pre_process(output,class_selecte,track,frame)  # 预处理
-        encoder(output,rate_point,tmc13,tmc)  # 编码
+        #encoder(output,rate_point,tmc13,tmc)  # 编码
         post_process(output)  # 后处理
 
         pointCloud = PCC_sequence + "/" + class_selecte + "/" + track + "/" + frame + ".ply"
@@ -417,7 +418,7 @@ class Gaussian:
 
     @staticmethod
     def render(frames,DIR,exe,class_selecte):
-
+        print("渲染:"+DIR)
         src=DIR+"/src/"+"frame"+"%03d" + ".ply"
         dec=DIR+"/dec/"+"frame"+"%03d" + ".ply"
         metrics(exe,src,dec,frames[0],len(frames),seq_information[class_selecte][0],seq_information[class_selecte][1],seq_information[class_selecte][2])
@@ -745,6 +746,18 @@ class Gaussian:
 
 if __name__ == '__main__':
     p = "1F-geo/"
+    tmc3_selected = 0
     g = Gaussian()
-    output_excel = "MPEG151-lift__vs__MPEG151-octree-opt.xlsm"
-    g.copy_to_excel( p + "MPEG151-lift.xlsm",p + "MPEG151-octree-opt.xlsm", 0, 0)
+    g.run()
+    os.rename("octree-raht","octree-raht-0")
+
+
+    template_excel=p+"/"+output_excel
+    tmc3_selected = 1
+    g = Gaussian()
+    g.anchor_name="MPEG-Pre"
+    g.test_name="MAX-MIN"
+    output="MPEG-Pre__vs__MAX-MIN.xlsm"
+    g.run()
+
+
