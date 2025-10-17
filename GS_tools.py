@@ -12,12 +12,6 @@ import shutil
 from my_tools import File
 import multiprocessing
 
-# 待测试的编解码器,str(tmc3_selected)+'_tmc3.exe'为对应文件
-tmc3_selected = 0
-
-# 输入文件路径
-template_excel = "ctc/empty.xlsm"  # 带宏的 Excel 模板
-output_excel="MPEG-Pre.xlsm"
 
 
 # 测试分支，注意：此处请单选
@@ -41,10 +35,11 @@ condition_selected = {
 
 # 点云类别，目前这个变量没有使用
 class_selected = (
+    "m71763_bartender_stable",
     "ManWithFruit",
     "m71763_breakfast_stable",
     "m71763_cinema_stable",
-    "m71763_bartender_stable",
+    
 )
 
 #1F-geom测试条件没有半track
@@ -53,11 +48,17 @@ tracks=(
     #"partially-track",
 )
 
+# 待测试的编解码器,str(tmc3_selected)+'_tmc3.exe'为对应文件
+tmc3_selected = 0
 
-thread_num_limit=[10,3]                     #编码、计算失真的进程数
+
+# 输入文件路径
+template_excel = "ctc/empty.xlsm"  # 带宏的 Excel 模板
+output_excel="MPEG151-octree-1frames.xlsm"
+thread_num_limit=[120,60]                     #进程数，建议30个左右，太多容易拥挤，出错
 
 
-PCC_sequence=r'D:\pcc_sequence\MPEG_3DGS'
+PCC_sequence='/media/hipeson/21bd72c3-b2ba-406a-a594-1a7e99218c8a/hipeson/mmc_pcc/share/MPEG_3DGS'
 
 #是否保存图像
 save_iamge=0
@@ -68,6 +69,7 @@ onlyViewpoint=1
 
 # 渲染图像的宽、高、视角数
 seq_information = {
+    #"ManWithFruit": [3840, 2160, 24],
     "ManWithFruit": [1920, 1080, 24],
     "m71763_breakfast_stable": [1920, 1080, 15],
     "m71763_cinema_stable": [1920, 1080, 21],
@@ -114,7 +116,7 @@ def pre_process(output,class_selecte,track,frame):
     write3DG_ply(q_pos, q_sh, q_opacity, q_scale, q_rot, False, file_quantized, tqdm)
 
 def post_process(output):
-    file_decoded = Path(output + "/quantized.ply")  # input: the PLY file of the decoded frame
+    file_decoded = Path(output + "/decoder.ply")  # input: the PLY file of the decoded frame
     file_config = Path(output + "/quantized.json")  # input: json file containing the informarion necessary to inverse the quantization
     file_dequantized = Path(output + "/dequantized.ply")  # output: PLY file of the dequantized decoded frame
 
@@ -130,42 +132,95 @@ def post_process(output):
 
     write3DG_ply(r_pos, r_sh, r_opacity, r_scale, r_rot, True, file_dequantized, tqdm)
 
-def encoder(output,rate_point,exe,tmc):
+def encoder(output,rate_point,exe,tmc,isEncoder):
+    def parse_time_output(time_output):
+        """解析 /usr/bin/time -v 的输出，提取 MaxRSS"""
+        maxrss = None
+        for line in time_output.split('\n'):
+            if 'Maximum resident set size (kbytes):' in line:
+                try:
+                    maxrss = int(line.split(':')[1].strip())
+                    break
+                except (ValueError, IndexError):
+                    continue
+        return maxrss
+
     if not os.path.exists(exe):
         print("无启动文件")
     frame=output.split("/")[-1]
 
     os.makedirs(str(Path(output).parent)+"/txt", exist_ok=True)
-    _file =str(Path(output).parent)+"/txt/"+frame+"__Bitbream__encoder.txt"
-    with open(_file, "w") as f:
-        main=exe
-        condition_selecte = condition_selected[list(condition_selected.keys())[0]]
-        cfg_path = os.getcwd() + "/cfg" + str(tmc) + "/" + branch_selected[0] + "/" + condition_selecte + "/" + rate_point
-        para_encfg = "-c " + cfg_path + "/encoder.cfg"
-        para_decfg = "-c " + cfg_path + "/decoder.cfg"
+    main = exe
+    condition_selecte = condition_selected[list(condition_selected.keys())[0]]
+    cfg_path = os.getcwd() + "/cfg" + str(tmc) + "/" + branch_selected[0] + "/" + condition_selecte + "/" + rate_point
+    para_encfg = "-c " + cfg_path + "/encoder.cfg"
+    para_decfg = "-c " + cfg_path + "/decoder.cfg"
 
-        para2 = "--uncompressedDataPath=" + output + "/" + "quantized.ply"
-        para3 = "--compressedStreamPath=" + output + "/" + "compress.bin"
-        para4 = "--reconstructedDataPath=" + output + "/" + "encoder.ply"
-        para = "%s %s %s %s %s" % (main, para_encfg, para2, para3,para4)
-        r = subprocess.run(para, capture_output=True, text=True)
-        print(r.stdout, file=f)
-        if not os.path.exists(output + "/" + "encoder.ply"):
-            print("编码端重建失败")
-            print("运行配置为: " + para)
+    para2 = "--uncompressedDataPath=" + output + "/" + "quantized.ply"
+    para3 = "--compressedStreamPath=" + output + "/" + "compress.bin"
+    para4 = "--reconstructedDataPath=" + output + "/" + "encoder.ply"
+    para = "%s %s %s %s %s" % (main, para_encfg, para2, para3, para4)  # 避免warning输出
+    para=f'/usr/bin/time -v {para}'
 
-    _file = str(Path(output).parent)+"/txt/"+frame+ "__Bitbream__decoder.txt"
-    with open(_file, "w") as f:
-        para4 = "--reconstructedDataPath=" + output + "/" + "decoder.ply"
-        para = "%s %s %s %s" % (main, para_decfg, para3, para4)
-        r = subprocess.run(para, capture_output=True, text=True)
-        print(r.stdout, file=f)
-        if not os.path.exists(output + "/" + "decoder.ply"):
-            print("解码端重建失败")
-            print("运行配置为: " + para)
-            print(r.stdout)
-    if not filecmp.cmp(output + "/" + "encoder.ply", output + "/" + "decoder.ply", shallow=False):
-        print("编解码不匹配")
+    if isEncoder:
+        _file =str(Path(output).parent)+"/txt/"+frame+"__Bitbream__encoder.txt"
+        with open(_file, "w") as f:
+
+            #para = "%s %s %s %s %s" % (main, para_encfg, para2, para3, para4)
+            #usage=resource.getrusage(resource.RUSAGE_SELF)
+
+            process = subprocess.Popen(
+                para,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            # 等待进程结束
+            out, err = process.communicate()
+
+
+            # 获取子进程的峰值内存
+            peak_mem_kb = parse_time_output(err)
+            print(out, file=f)
+            print(f"峰值内存: {peak_mem_kb} KB",file=f)
+
+            if not os.path.exists(output + "/" + "encoder.ply"):
+                print("编码端重建失败")
+                print("运行配置为: " + para)
+
+    else:
+        _file = str(Path(output).parent)+"/txt/"+frame+ "__Bitbream__decoder.txt"
+        with open(_file, "w") as f:
+            para4 = "--reconstructedDataPath=" + output + "/" + "decoder.ply"
+            para = "%s %s %s %s" % (main, para_decfg, para3, para4)
+            para = f'/usr/bin/time -v {para}'
+
+            process = subprocess.Popen(
+                para,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            # 等待进程结束
+            out, err = process.communicate()
+
+            # 获取子进程的峰值内存
+
+            peak_mem_kb = parse_time_output(err)
+            print(out, file=f)
+            print(f"峰值内存: {peak_mem_kb} KB", file=f)
+
+
+            if not os.path.exists(output + "/" + "decoder.ply"):
+                print("解码端重建失败")
+                print("运行配置为: " + para)
+                #print(r.stdout)
+        if not filecmp.cmp(output + "/" + "encoder.ply", output + "/" + "decoder.ply", shallow=False):
+            print("编解码不匹配")
 
 def cam_to_ply(ply,camDIR,exe,output):
     para1="--input="+ply
@@ -188,7 +243,16 @@ def cam_to_ply(ply,camDIR,exe,output):
     para4="--output="+output
     para5="--verbose=1"
     para = "%s %s %s %s %s %s" % (exe, para1, para2, para3, para4, para5)
-    r = subprocess.run(para, capture_output=True, text=True)
+    process = subprocess.Popen(
+        para,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    # 等待进程结束
+    out, err = process.communicate()
+
 
 def metrics(exe,src,dec,frame_start,frame_num,width,hight,num_view):
 
@@ -196,23 +260,32 @@ def metrics(exe,src,dec,frame_start,frame_num,width,hight,num_view):
     para2="-b "+dec
     para3="--width="+str(width)+" --height="+str(hight)
 
-    para4="-i "+str(frame_start)+" -f "+str(frame_num)
-
+    para4="-i "+str(frame_start)+" -f "+str(frame_num)+" --cpu=1" #cpu
+    #para4 = "-i " + str(frame_start) + " -f " + str(frame_num)
     if frame_num==1:
         para5 = ("--useCameraPosition=1"
-                 f" -s {save_iamge}"
-                 f" -n {num_view}")
+                 f" -s {save_iamge}")
     else:
         para5=("--useCameraPosition=1"
            f" -s {save_iamge}"
            f" --onlyViewpoint={onlyViewpoint}")
+        
 
     para = "%s %s %s %s %s %s" % (exe, para1, para2, para3, para4, para5)
-    r = subprocess.run(para, capture_output=True, text=True)
+    process = subprocess.Popen(
+            para,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        # 等待进程结束
+    out, err = process.communicate()
+    metric_path = str(Path(dec).parent.parent)+"/metrics/" +str(frame_start) + "__metrics.txt"
+    os.makedirs(str(Path(dec).parent.parent)+"/metrics", exist_ok=True)
+    with open(metric_path, "a") as f:
+            print(out,file=f)
 
-    metric_path = str(Path(dec).parent.parent) + "/__metrics.txt"
-    with open(metric_path, "w") as f:
-        print(r.stdout,file=f)
 
 class Gaussian:
     def __init__(self,PCC_sequence=PCC_sequence):
@@ -220,21 +293,23 @@ class Gaussian:
         self.frames = range(0, 1)  # 起始帧，终止帧,指stable的起始帧与结束帧
         self.fruitFrame = range(81, 82)
 
-        self.anchor_name="MPEG151"
-        self.test_name="opt-raht"
+        self.anchor_name="MPEG151-octree"
+        self.test_name="MPEG151-raht20"
 # ======================================
 # 下面变量代码为测试的运行文件
 
-        self.tmc13=str(tmc3_selected)+'_tmc3.exe'
+        self.tmc13="./"+str(tmc3_selected)+'_tmc3'
 
 # ======================================
 # 下面变量代码短期不需要修改
 
         self.PCC_sequence=PCC_sequence
-        self.cameraPosition="example/cameraPosition.exe"
-        self.mpeg_gsc_metrics = "example/mpeg-gsc-metrics.exe"
+        self.cameraPosition="./example/cameraPosition"
+        self.mpeg_gsc_metrics = "./example/mpeg-gsc-metrics"
         self.rate_points=["r01","r02","r03","r04","r05"]
-        self.complute_PSNR=1                             #该参数决定是否进行metrics的计算
+       
+
+
 
         self.anchor_columns = {
             "PSNR-RGB": "F",  # PSNR-RGB 列
@@ -322,7 +397,7 @@ class Gaussian:
         self.wb = openpyxl.load_workbook(template_excel, keep_vba=True, read_only=False)
         self.run()
         self.tmc=0
-        self.tmc13 = '0_tmc3.exe'
+        self.tmc13 = './0_tmc3.exe'
         self.wb = openpyxl.load_workbook(branch_selected[0]+"/"+output_excel, keep_vba=True, read_only=False)
         self.run()
 
@@ -335,7 +410,7 @@ class Gaussian:
                 shutil.rmtree(branch_selected[0])
 
         # ======================================
-        # 编解码
+        # 编码
             thread_pool = multiprocessing.Pool(thread_num_limit[0])
             for class_selecte in class_selected:
                 for track in tracks if class_selecte.find("stable")>=0 else [class_selecte]:
@@ -357,10 +432,41 @@ class Gaussian:
 
                             cameras_path = PCC_sequence + "/" + class_selecte + "/cameras" + cameras_name
                             #self.sub_run(class_selecte,track,rate_point,frame,self.tmc13,self.tmc,cameras_path,self.cameraPosition)
-                            thread_pool.apply_async(self.sub_run, args=(class_selecte,track,rate_point,frame,self.tmc13,self.tmc,cameras_path,self.cameraPosition))
+                            thread_pool.apply_async(self.sub_run, args=(class_selecte,track,rate_point,frame,self.tmc13,self.tmc,cameras_path,self.cameraPosition,True))
 
             thread_pool.close()  # 关闭进程池入口，不再接受新进程插入
             thread_pool.join()  # 主进程阻塞，等待进程池中的所有子进程结束，再继续运行主进程
+
+            # ======================================
+            # 解码
+            thread_pool = multiprocessing.Pool(thread_num_limit[0])
+            for class_selecte in class_selected:
+                for track in tracks if class_selecte.find("stable") >= 0 else [class_selecte]:
+                    for rate_point in self.rate_points:
+                        if class_selecte.find("stable") >= 0:
+                            frames = self.frames
+                        else:
+                            frames = self.fruitFrame
+
+                        for frame in frames:
+
+                            if class_selecte.find("stable") >= 0:
+                                if class_selecte == "m71763_bartender_stable" or class_selecte == "m71763_breakdance_stable":
+                                    cameras_name = f"/frame{frame:03d}"
+                                else:
+                                    cameras_name = ""
+                            else:
+                                cameras_name = f"/{frame:06d}/sparse/0"
+
+                            cameras_path = PCC_sequence + "/" + class_selecte + "/cameras" + cameras_name
+                            # self.sub_run(class_selecte,track,rate_point,frame,self.tmc13,self.tmc,cameras_path,self.cameraPosition)
+                            thread_pool.apply_async(self.sub_run,
+                                                    args=(class_selecte, track, rate_point, frame, self.tmc13, self.tmc,
+                                                          cameras_path, self.cameraPosition,False))
+
+            thread_pool.close()  # 关闭进程池入口，不再接受新进程插入
+            thread_pool.join()  # 主进程阻塞，等待进程池中的所有子进程结束，再继续运行主进程
+
 
         # ======================================
         # 渲染 计算失真
@@ -376,52 +482,57 @@ class Gaussian:
 
                         condition_selecte = condition_selected[list(condition_selected.keys())[0]]
                         DIR=os.getcwd()+"/"+branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point
-                        if self.complute_PSNR:
-                            thread_pool.apply_async(self.render, args=(frames,DIR,self.mpeg_gsc_metrics,class_selecte))
+                        print("渲染:" + branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point)
+                        for frame_id in frames:
+                            thread_pool.apply_async(self.render, args=(frame_id,DIR,self.mpeg_gsc_metrics,class_selecte))
 
 
             thread_pool.close()  # 关闭进程池入口，不再接受新进程插入
             thread_pool.join()  # 主进程阻塞，等待进程池中的所有子进程结束，再继续运行主进程
 
-            if self.complute_PSNR:
-                self.write_to_excel()      #写入excel
-            else:
-                self.display()
+            self.write_to_excel()      #写入excel
 
     @staticmethod
-    def sub_run(class_selecte,track,rate_point,frame,tmc13,tmc,cameras_path,cameraPosition):
+    def sub_run(class_selecte,track,rate_point,frame,tmc13,tmc,cameras_path,cameraPosition,isEncoder):
         frame_DIR=frame
 
         condition_selecte=condition_selected[list(condition_selected.keys())[0]]
         output =  os.getcwd()+"/"+branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point+"/"+f"frame{frame:03d}"
-        print("正在运行:"+os.path.join(branch_selected[0],condition_selecte,class_selecte,track,rate_point,f"frame{frame:03d}"))
+        if isEncoder:
+            print("正在编码:"+os.path.join(branch_selected[0],condition_selecte,class_selecte,track,rate_point,f"frame{frame:03d}"))
+        else:
+            print("正在解码:"+os.path.join(branch_selected[0],condition_selecte,class_selecte,track,rate_point,f"frame{frame:03d}"))
         os.makedirs(output, exist_ok=True)
         frame=f"frame{frame:03d}" if class_selecte.find("stable")>=0 else f"{frame:04d}"
 
-        pre_process(output,class_selecte,track,frame)  # 预处理
-        #encoder(output,rate_point,tmc13,tmc)  # 编码
-        post_process(output)  # 后处理
+        if isEncoder:
+            pre_process(output,class_selecte,track,frame)  # 预处理
+            encoder(output,rate_point,tmc13,tmc,isEncoder)  # 编码
+        else:
+            encoder(output, rate_point, tmc13, tmc, isEncoder)  # 编码
+            post_process(output)  # 后处理
 
-        pointCloud = PCC_sequence + "/" + class_selecte + "/" + track + "/" + frame + ".ply"
+            pointCloud = PCC_sequence + "/" + class_selecte + "/" + track + "/" + frame + ".ply"
 
-        src_DIR=os.getcwd()+"/"+branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point+"/src"
-        dec_DIR = os.getcwd()+"/"+branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point+"/dec"
-        os.makedirs(src_DIR, exist_ok=True)
-        os.makedirs(dec_DIR, exist_ok=True)
+            src_DIR=os.getcwd()+"/"+branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point+"/src"
+            dec_DIR = os.getcwd()+"/"+branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+rate_point+"/dec"
+            os.makedirs(src_DIR, exist_ok=True)
+            os.makedirs(dec_DIR, exist_ok=True)
+            
+            cam_to_ply(pointCloud,cameras_path,cameraPosition,src_DIR+"/"+f"frame{frame_DIR:03d}"+".ply")
+            cam_to_ply(output + "/dequantized.ply", cameras_path, cameraPosition, dec_DIR + "/" + f"frame{frame_DIR:03d}" + ".ply")
 
-        cam_to_ply(pointCloud,cameras_path,cameraPosition,src_DIR+"/"+f"frame{frame_DIR:03d}"+".ply")
-        cam_to_ply(output + "/dequantized.ply", cameras_path, cameraPosition, dec_DIR + "/" + f"frame{frame_DIR:03d}" + ".ply")
+            shutil.rmtree(output)
 
-        shutil.rmtree(output)
-
-        print("结束:" + os.path.join(branch_selected[0],condition_selecte,class_selecte,track,rate_point,frame))
+            print("结束:" + os.path.join(branch_selected[0],condition_selecte,class_selecte,track,rate_point,frame))
 
     @staticmethod
-    def render(frames,DIR,exe,class_selecte):
-        print("渲染:"+DIR)
+    def render(frame_id,DIR,exe,class_selecte):
+
         src=DIR+"/src/"+"frame"+"%03d" + ".ply"
         dec=DIR+"/dec/"+"frame"+"%03d" + ".ply"
-        metrics(exe,src,dec,frames[0],len(frames),seq_information[class_selecte][0],seq_information[class_selecte][1],seq_information[class_selecte][2])
+        metrics(exe,src,dec,frame_id,1,seq_information[class_selecte][0],seq_information[class_selecte][1],seq_information[class_selecte][2])
+
 
     def write_to_excel(self):
         # ======================================
@@ -470,17 +581,23 @@ class Gaussian:
         PSNR = dict()
         with open(file_path, "r") as f:
             contents = f.readlines()
-
+        frame_num=0
+        PSNR["PSNR-RGB"]=0
+        PSNR["PSNR-YCbCr"]=0
+        PSNR["SSIM-YCbCr"]=0
         for content in contents:
             if content.find("OM-")>=0:         #跳过OM-PSNE,OM-IVSSIM、、
                 continue
             if content.find("Psnr RGB (avg)")>=0:
-                PSNR["PSNR-RGB"]=float(content.split()[4])
+                frame_num=frame_num+1
+                PSNR["PSNR-RGB"]+=float(content.split()[4])
             elif content.find("Psnr YUV (avg)")>=0:
-                PSNR["PSNR-YCbCr"]=float(content.split()[4])
+                PSNR["PSNR-YCbCr"]+=float(content.split()[4])
             elif content.find("SSIM (avg)")>=0:
-                PSNR["SSIM-YCbCr"]=float(content.split()[3])
-
+                PSNR["SSIM-YCbCr"]+=float(content.split()[3])
+        PSNR["PSNR-RGB"]/=frame_num
+        PSNR["PSNR-YCbCr"]/=frame_num
+        PSNR["SSIM-YCbCr"]/=frame_num
         data[file_path]=PSNR
         return data
 
@@ -499,18 +616,22 @@ class Gaussian:
         for path in metrics_data:
             key=list(path.keys())[0]
             labels=key.split("/")
-            increase_row=int(labels[-2][1:3])-1
+            increase_row=int(labels[-3][1:3])-1
 
-            _class = labels[-4].split("_")[1] if labels[-4].find("stable")>=0 else labels[-4]
-            track=labels[-3]
-            sheet_name = f'{_class}_{self.tracks_name[track]}' if labels[-4].find("stable")>=0 else f'{_class}'
-
+            _class = labels[-5].split("_")[1] if labels[-5].find("stable")>=0 else labels[-5]
+            track=labels[-4]
+            sheet_name = f'{_class}_{self.tracks_name[track]}' if labels[-5].find("stable")>=0 else f'{_class}'
+            frames=self.fruitFrame if _class=="ManWithFruit" else self.frames
+            numframes=len(frames)
             row = start_row +increase_row# 假设数据按顺序排列
             data = path[key]
             ws=self.wb[sheet_name]
             # 写入指标数据（保留原始精度）
             for key in columns.keys():
-                ws[f'{columns[key]}{row}'].value = data[key]
+                if ws[f'{columns[key]}{row}'].value==None:
+                    ws[f'{columns[key]}{row}'].value = data[key]/numframes
+                else:
+                    ws[f'{columns[key]}{row}'].value += data[key]/numframes
 
 
 # ======================================
@@ -607,7 +728,6 @@ class Gaussian:
         """聚合属性到指定分类"""
 
         # 第一种定义：通过结果推理出的
-        '''
         sh1=["f_rest_0s","f_rest_1s","f_rest_2s",
              "f_rest_15s","f_rest_16s","f_rest_17s",
              "f_rest_30s","f_rest_31s","f_rest_32s"]
@@ -617,10 +737,10 @@ class Gaussian:
         sh3=["f_rest_7s","f_rest_8s","f_rest_9s","f_rest_10s","f_rest_11s","f_rest_12s","f_rest_13s","f_rest_14s",
              "f_rest_22s","f_rest_23s","f_rest_24s","f_rest_25s","f_rest_26s","f_rest_27s","f_rest_28s","f_rest_29s",
              "f_rest_37s","f_rest_38s","f_rest_39s","f_rest_40s","f_rest_41s","f_rest_42s","f_rest_43s","f_rest_44s"]
-        '''
+
 
         # 第二种定义：我认为的
-
+        '''
         sh1=["f_rest_0s","f_rest_1s","f_rest_2s",
              "f_rest_15s","f_rest_16s","f_rest_17s",
              "f_rest_30s","f_rest_31s","f_rest_32s"]
@@ -630,16 +750,16 @@ class Gaussian:
         sh3=["f_rest_8s","f_rest_9s","f_rest_10s","f_rest_11s","f_rest_12s","f_rest_13s","f_rest_14s",
              "f_rest_23s","f_rest_24s","f_rest_25s","f_rest_26s","f_rest_27s","f_rest_28s","f_rest_29s",
              "f_rest_38s","f_rest_39s","f_rest_40s","f_rest_41s","f_rest_42s","f_rest_43s","f_rest_44s"]
-
+        '''
 
         return {
             "position": sum(attrs[k] for k in attrs.keys() if k.startswith("positions")),
-            "sh0": sum(attrs[k] for k in attrs.keys() if (k.startswith("f_dc_")) or k.startswith("SH0")),
-            "sh1": sum(attrs[k] for k in attrs.keys() if k in sh1 or k.startswith("SH1")),
-            "sh2": sum(attrs[k] for k in attrs.keys() if k in sh2 or k.startswith("SH2")),
-            "sh3": sum(attrs[k] for k in attrs.keys() if k in sh3 or k.startswith("SH3")),
-            "rotation": sum(attrs[k] for k in attrs.keys() if k.startswith("rot")),
-            "scaling": sum(attrs[k] for k in attrs.keys() if k.startswith("scale")),
+            "sh0": sum(attrs[k] for k in attrs.keys() if k.startswith("f_dc_")),
+            "sh1": sum(attrs[k] for k in attrs.keys() if k in sh1),
+            "sh2": sum(attrs[k] for k in attrs.keys() if k in sh2),
+            "sh3": sum(attrs[k] for k in attrs.keys() if k in sh3),
+            "rotation": sum(attrs[k] for k in attrs.keys() if k.startswith("rot_")),
+            "scaling": sum(attrs[k] for k in attrs.keys() if k.startswith("scale_")),
             "opacity": sum(attrs[k] for k in attrs.keys() if k.startswith("opacity")),
             "metadata": attrs["metadata"],  # 元数据占位符
             "T_Enc":attrs["encoder Processing time (user):"],
@@ -648,6 +768,8 @@ class Gaussian:
             "G_Dec": attrs["d-gtime"],
             "A_Enc": attrs["e-atime"],
             "A_Dec": attrs["d-atime"],
+            "maxRSS_Enc":attrs["e-MaxRSS"],
+            "maxRSS_Dec": attrs["d-MaxRSS"],
         }
 
 # ======================================
@@ -725,39 +847,23 @@ class Gaussian:
 
         my.save("1F-geo/" + output_excel)
 
-    #播放点云
-    def display(self,r="r01"):
-        main="./example/PccAppRenderer.exe"
-        for class_selecte in class_selected:
-            for track in tracks if class_selecte.find("stable") >= 0 else [class_selecte]:
-
-                condition_selecte = condition_selected[list(condition_selected.keys())[0]]
-                DIR=branch_selected[0]+"/"+condition_selecte+"/"+class_selecte+"/"+track+"/"+r+"/dec/"
-
-                if class_selecte.find("stable") >= 0:
-                    frames = self.frames
-                else:
-                    frames = self.fruitFrame
-
-                cmp= f"{main} -d {DIR} -n {len(frames)} -g 1 --fps=5 --play=1"
-
-                subprocess.Popen(cmp)
-
 
 if __name__ == '__main__':
-    p = "1F-geo/"
-    tmc3_selected = 0
+    p = "./1F-geo"
     g = Gaussian()
     g.run()
-    os.rename("octree-raht","octree-raht-0")
 
-
-    template_excel=p+"/"+output_excel
+    template_excel = p+"/"+output_excel  # 带宏的 Excel 模板
+    #
     tmc3_selected = 1
+
     g = Gaussian()
-    g.anchor_name="MPEG-Pre"
-    g.test_name="MAX-MIN"
-    output="MPEG-Pre__vs__MAX-MIN.xlsm"
+    g.anchor_name="MPEG151-raht20"
+    g.test_name="raht20new"
+
+    output_excel = "MPEG151-raht20__vs_raht20new-1frames.xlsm"
     g.run()
+
+
 
 

@@ -1,3 +1,0 @@
- ./mpeg-gsc-metrics.exe -a C:\little_boy\vs_workspace\GPCC_encoder_3dgs\octree-raht\lossless-geom-lossy-attrs\ManWithFruit\ManWithFruit\r01\dec\frame%03d.ply -b C:\little_boy\vs_workspace\GPCC_encoder_3dgs\octree-raht\lossless-geom-lossy-attrs\ManWithFruit\ManWithFruit\r01\src\frame%03d.ply -f 64 -i 81 --display=1 --onlyViewpoint=10 --width=1920 --height=1080 
-
-./PccAppRenderer.exe -d C:\little_boy\vs_workspace\GPCC_encoder_3dgs\octree-raht\lossless-geom-lossy-attrs\ManWithFruit\ManWithFruit\r01\dec\ -g 1 -n 219 --play=1 --fps=10

@@ -215,6 +215,6 @@ class YUVPlayer:
 
 
 if __name__ == '__main__':
-    path=r"C:\Users\31046\Desktop\GPCC_encoder_3dgs\octree-raht\lossless-geom-lossy-attrs\m71763_breakfast_stable\track\r01\dec\frame_gpu_img_dec_1920x1080_8b_i444.rgb"
+    path=r"C:\Users\31046\Desktop\GPCC_encoder_3dgs\octree-raht\lossless-geom-lossy-attrs\ManWithFruit\ManWithFruit\r01\dec\frame_gpu_img_src_3840x2160_8b_i444.rgb"
     a=YUVPlayer(path)
     a.play()
