@@ -56,9 +56,35 @@ class File:
         list_in = []
         list_in = add_AllPathFromBase_into_list(name, ori_path, list_in)
         if len(list_in) == 0:
-            return None
-
+            return []
+        elif len(list_in) == 1:
+            return list_in[0]
         return list_in  # list=get_all_file_from_baseCatalog("encoder",base)
+
+    def insert_line_above_target(filename, new_line, target_line):
+
+            # 读取文件内容
+            with open(filename, 'r', encoding='utf-8') as file:
+                lines = file.readlines()
+
+            # 找到目标行的索引
+            target_index = -1
+            for i, line in enumerate(lines):
+                if target_line in line:
+                    target_index = i
+                    break
+
+            # 在新行末尾添加换行符（如果还没有的话）
+            if not new_line.endswith('\n'):
+                new_line += '\n'
+
+            # 在目标行前插入新行
+            lines.insert(target_index, new_line)
+
+            # 写回文件
+            with open(filename, 'w', encoding='utf-8') as file:
+                file.writelines(lines)
+
 
 
 class YUVPlayer:
@@ -215,6 +241,6 @@ class YUVPlayer:
 
 
 if __name__ == '__main__':
-    path=r"C:\Users\31046\Desktop\GPCC_encoder_3dgs\octree-raht\lossless-geom-lossy-attrs\m71763_breakfast_stable\track\r01\dec\frame_gpu_img_dec_1920x1080_8b_i444.rgb"
+    path=r"C:\Users\31046\Desktop\GPCC_encoder_3dgs\octree-raht\lossless-geom-lossy-attrs\ManWithFruit\ManWithFruit\r01\dec\frame_gpu_img_src_3840x2160_8b_i444.rgb"
     a=YUVPlayer(path)
     a.play()
